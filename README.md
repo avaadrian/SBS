@@ -161,6 +161,20 @@ compared) and POST alert batches (gzip, idempotent by alert ID) and heartbeats; 
 heartbeat response carries any queued commands. Uploads that fail are spooled to disk by
 the agent and resent when the server returns, so alerts survive an outage.
 
+**Operator auth & TLS.** Set `-console-token` (or `SBS_CONSOLE_TOKEN`) to require a login
+(session cookie, `HttpOnly`/`SameSite=Strict`, rate-limited) before the console and its
+API; `-tls-cert`/`-tls-key` serve HTTPS. The server refuses to bind a non-loopback
+address with no console token unless `-insecure-no-auth` is set. Without a console token
+it runs open and must stay on localhost.
+
+## Fleet control
+
+From the console you drive agents without touching them:
+
+- **Live response mode** — switch a host between `off`/`ask`/`auto` from the Hosts table; the choice reaches the agent on its next heartbeat and the agent reports back the mode it is actually running.
+- **Rule distribution** — write or AI-generate a detection rule, review the validated YAML, and deploy it. The server versions the enabled rule set; agents fetch and **hot-reload** it into the live engine without a restart, and report the version they loaded (and any load error). A bad rule keeps the previous engine.
+- **Circuit breaker** — in `auto` mode an agent caps automatic kills/quarantines per minute (`response.max_auto_actions_per_minute`); if it trips, it drops to `ask` and flags `auto_response_tripped` in the console, so a bad distributed rule can't make it kill processes en masse.
+
 ## AI analyst
 
 The analyst (`internal/llm`) adds three capabilities, all **advisory** — no AI output
@@ -191,36 +205,38 @@ inert text.
 Phases:
 
 1. **Benign workload.** 45 normal admin commands (ls, tar, curl --version, base64 round-trips, chmod 644 …). Any alert counts as a false positive.
-2. **Attack scenarios.** Techniques across execution, persistence, privilege escalation, defense evasion, credential access, C2 and impact. Each passes if an expected rule or signature fires within `-timeout` (3s). Two suites: the **built-in** set (17 scenarios) and, with `-heldout`, an **independent** set (16 scenarios) written from attacker behavior rather than from the rules.
+2. **Attack scenarios.** Techniques across execution, persistence, privilege escalation, defense evasion, credential access, C2 and impact. Each passes if an expected rule or signature fires within `-timeout` (3s). Three suites: the **built-in** set (17 scenarios), a first **held-out** set (`-heldout`, 16 scenarios) written from attacker behavior rather than the rules, and a second **blind held-out** set (`-heldout2`, 17 scenarios) across TTPs the first didn't cover.
 3. **Exec burst.** 300 short-lived processes, to measure how many the agent actually sees.
 
 The agent's CPU and RSS are sampled from `/proc` throughout. Auto-response and the
 anomaly layer are disabled during the benchmark so it measures detection cleanly.
 
-Flags: `-heldout`, `-only <name>`, `-source procfs|netlink`, `-load N`, `-json`, `-md`,
-`-keep`, `-min-detection <0..1>` and `-max-fp <n>` (gates for CI).
+Flags: `-heldout`, `-heldout2`, `-only <name>`, `-source procfs|netlink`, `-load N`,
+`-json`, `-md`, `-keep`, `-min-detection <0..1>` and `-max-fp <n>` (gates for CI).
 
 Reference results from this repo's dev container (kernel 6.18):
 
-| | built-in (netlink) | **held-out** (netlink) | /proc polling |
+| | built-in | held-out v1 | held-out v2 (blind) |
 |---|---|---|---|
-| Detection rate | 17/17 (100%) | **10/14 (71%)** | 17/17 |
-| Median time to detect | 1 ms | 1 ms | 20 ms |
+| Detection rate | 17/17 (100%) | **12/14 (86%)** | **1/16 (6%)** |
+| Median time to detect | 1 ms | 1 ms | 1 ms |
 | False positives | 0 / 45 | 0 / 45 | 0 / 45 |
-| Short-lived exec visibility | **300/300** | **300/300** | **0/300** |
-| Agent peak RSS | 14 MB | 46 MB | 9.5 MB |
+| Short-lived exec visibility | 300/300 | 300/300 | 300/300 |
 
-Full tables: [netlink](docs/benchmark-netlink.md), [held-out](docs/benchmark-heldout.md), [procfs](docs/benchmark-procfs.md).
+All on the netlink collector; `/proc` polling sees 0/300 short-lived processes, which is
+why netlink (or eBPF) is the default. Full tables: [netlink](docs/benchmark-netlink.md),
+[held-out v1](docs/benchmark-heldout.md), [held-out v2](docs/benchmark-heldout2.md).
 
-**Read these numbers carefully.** In the built-in suite the rules and scenarios were
-written together, so 17/17 only shows the pipeline works end to end. The **held-out
-suite is the honest measure**: its scenarios were written from the attacker's side
-and were allowed to miss — and four do (a shebang dropper run from `$HOME`, a
-`systemd-run` transient unit, an SSH key at a non-standard path, and an
-`ld.so.preload` sibling filename), each naming a real, debuggable coverage gap.
-71% against never-seen techniques is a far more useful baseline than 100% against
-tuned ones; track it as rules improve. Exec visibility is the other key metric:
-polling misses nearly every short-lived process, which is why netlink is the default.
+**Read these numbers carefully.** The built-in 17/17 only shows the pipeline works
+end to end — the rules and scenarios were written together. The **held-out suites are
+the honest measure**: their scenarios were written from the attacker's side and allowed
+to miss. Held-out v1 reaches 86% after closing four coverage gaps as general rule
+classes; its two remaining misses are real agent limitations (an inotify race on a
+freshly-created deep directory, and a preload watch scoped to the exact filename).
+**Held-out v2 sits at 6% by design** — it is a blind set over techniques SBS has no
+rules for yet (discovery, LOLBins, container escape, exfil, env-based `LD_PRELOAD`,
+timestomping), so it maps the true coverage frontier. Track both as rules improve;
+0 false positives throughout is as important as the detection rate.
 
 CI (`.github/workflows/ci.yml`) runs unit tests and then the benchmark as root, fails on
 any missed detection or false positive, and puts the Markdown report in the job summary.
@@ -232,28 +248,46 @@ cmd/sbs-agent            agent CLI (run, scan, rules, version)
 cmd/sbs-server           server + web console CLI
 cmd/sbs-bench            benchmark CLI
 internal/collector/proc  netlink exec events, /proc polling, process enrichment
+internal/collector/ebpf  CO-RE eBPF exec collector (build with -tags ebpf)
 internal/collector/fs    inotify watcher
 internal/scanner         hash + string signature engine
 internal/rules           rule engine
 internal/anomaly         behavioral anomaly layer (new-binary, fan-out)
 internal/response        kill + quarantine actions
-internal/agent           pipeline, dedup, response, server upload
-internal/transport       agent→server client with offline spooling
+internal/agent           pipeline, dedup, response, live mode, rule hot-reload
+internal/transport       agent→server client with offline spooling + TLS
 internal/api             agent/server wire types
 internal/store           SQLite persistence (server)
-internal/server          HTTP API + embedded dashboard
+internal/server          HTTP API + console auth + embedded dashboard
 internal/llm             AI analyst: interface, Ollama, Claude, mock, redactor
-internal/bench           scenarios (built-in + held-out), runner, reports
+internal/bench           scenarios (built-in + 2 held-out suites), runner, reports
 assets/                  built-in rules and signatures (embedded)
-configs/, deploy/        example config, systemd unit
+configs/                 example agent config
+deploy/, scripts/        systemd units, Docker/compose, install scripts
 ```
+
+## Deploy
+
+`deploy/README.md` has the full ops guide. Quick start with Docker (server + a local
+Ollama for triage):
+
+```sh
+./scripts/gen-tokens.sh --write     # writes .env (agent + console tokens)
+docker compose up -d --build        # server on 127.0.0.1:8080, ollama alongside
+docker compose exec ollama ollama pull llama3.1
+```
+
+Install an agent on a host with `scripts/install-agent.sh` (systemd unit, config, state
+dirs). Build with eBPF support: `go build -tags ebpf ./cmd/sbs-agent` (needs a recent
+kernel with BTF and `CAP_BPF`; see `internal/collector/ebpf/BUILD.md`).
 
 ## Known limits and next steps
 
-- **Exec race.** The netlink connector reports the PID, and the agent then reads `/proc`. A process that exits within microseconds can be gone first — and auto-response can then only act on what it read. An **eBPF** collector (tracepoints `sched_process_exec`, `security_bprm_check`) would capture argv in the kernel and add network connects and file opens per process.
-- **Response is reactive, not blocking.** Kill happens after exec, so a fast payload may run first. True prevention needs `fanotify` permission events (block execution of known-bad binaries) or an LSM/eBPF hook.
+- **Exec race (reduced, not gone).** The netlink collector reports a PID and the agent then reads `/proc`, so a process that exits within microseconds can be gone first. The **eBPF collector** (`-tags ebpf`, `sched_process_exec`) captures pid/comm/filename in the kernel and closes most of that gap; extending it to argv and per-process network/file events is the next step.
+- **Response is reactive, not blocking.** Kill happens after exec, so a fast payload may run first. True prevention needs `fanotify` permission events or an LSM/eBPF hook.
 - **Signatures are basic.** The matcher uses `bytes.Contains`; Aho-Corasick or real YARA (cgo + libyara) would scale to large rule sets.
-- **Server is single-node and console is unauthenticated** (bind to localhost / behind a proxy). Next: operator auth, TLS, rule distribution to agents, agent tamper protection, and SIEM export (syslog/Kafka).
-- **AI is advisory and non-deterministic.** Triage quality depends on the model; a local Ollama model is weaker than Claude. Outputs never drive automated response, and should be reviewed. Add an eval set to track triage accuracy over time.
-- **Held-out detection is 71%.** Four named gaps are open (see Benchmark). Closing them (interpreter-launched shells from `$HOME`, broader persistence watch paths, case-insensitive directive matching) is the most direct quality work.
+- **Trust model.** An agent trusts its server (for live mode and distributed rules); the circuit breaker bounds the blast radius of a bad rule, and TLS + tokens protect the channel, but a compromised server can still disable response or push noisy rules. Next: signed rule sets and agent tamper protection.
+- **AI is advisory and non-deterministic.** Triage/rule-gen quality depends on the model; a local Ollama model is weaker than Claude. Outputs never drive automated response and generated rules are operator-reviewed. Add an eval set to track quality over time.
+- **Detection frontier.** Held-out v1 is 86% (two honest limitations remain); held-out v2 is 6% — a map of uncovered TTPs (discovery, LOLBins, container escape, exfil, env-based `LD_PRELOAD`, timestomping) and the clearest backlog of rule work.
+- **Server is single-node; SIEM export (syslog/Kafka) and multi-tenant auth are not built.**
 - **Linux only.** Windows would need ETW and a different collector set.
