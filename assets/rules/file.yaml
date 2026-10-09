@@ -1,0 +1,88 @@
+# File integrity detections. Watched paths and their tags come from the agent config.
+# Fields: file.{path,name,op,tag,size,mode,sha256}
+
+- id: SBS-FILE-001
+  title: Persistence location modified
+  description: A cron, systemd, init or shell-profile location was changed.
+  severity: high
+  mitre: [T1053.003, T1543.002, T1037]
+  event: file
+  match:
+    all:
+      - field: file.tag
+        value: persistence
+      - field: file.op
+        value: [create, modify, rename]
+
+- id: SBS-FILE-002
+  title: SSH authorized_keys modified
+  description: A key was added to authorized_keys, granting persistent SSH access.
+  severity: high
+  mitre: [T1098.004]
+  event: file
+  match:
+    all:
+      - field: file.name
+        value: [authorized_keys, authorized_keys2]
+      - field: file.op
+        value: [create, modify, rename]
+
+- id: SBS-FILE-003
+  title: Dynamic linker preload configured
+  description: /etc/ld.so.preload forces a library into every process, a classic userland rootkit technique.
+  severity: critical
+  mitre: [T1574.006]
+  event: file
+  match:
+    all:
+      - field: file.tag
+        value: preload
+      - field: file.op
+        value: [create, modify, rename]
+
+- id: SBS-FILE-004
+  title: Account or sudo configuration modified
+  description: passwd, shadow or sudoers changed.
+  severity: medium
+  mitre: [T1136.001, T1548.003]
+  event: file
+  match:
+    all:
+      - field: file.tag
+        value: accounts
+      - field: file.op
+        value: [create, modify, rename]
+
+- id: SBS-FILE-005
+  title: Executable dropped in temp directory
+  description: A file with execute permission appeared in a world-writable directory.
+  severity: medium
+  mitre: [T1105]
+  event: file
+  match:
+    all:
+      - field: file.tag
+        value: drop
+      - field: file.op
+        value: [modify, rename, chmod]
+      - field: file.mode
+        op: regex
+        value: '[1357][0-7]{0,2}$'
+      - not:
+          field: file.path
+          op: contains
+          value: [/go-build]
+
+- id: SBS-FILE-006
+  title: SUID/SGID file in temp directory
+  description: A setuid or setgid file exists in a world-writable directory.
+  severity: high
+  mitre: [T1548.001]
+  event: file
+  match:
+    all:
+      - field: file.tag
+        value: drop
+      - field: file.mode
+        op: regex
+        value: '^0[2-7][0-7]{3}$'

@@ -1,0 +1,172 @@
+# Process execution detections.
+# Fields: process.{pid,ppid,uid,exe,name,cmdline,cwd,stdin,stdout,remote}, parent.{exe,name,cmdline}
+
+- id: SBS-PROC-001
+  title: Download piped to shell
+  description: A remote script is fetched and executed directly, a common initial-access and installer-abuse pattern.
+  severity: high
+  mitre: [T1059.004, T1105]
+  event: process
+  match:
+    field: process.cmdline
+    op: regex
+    value: '\b(curl|wget|fetch)\b[^|;]*\|\s*(sudo\s+)?(ba|da|z|k)?sh\b'
+
+- id: SBS-PROC-002
+  title: Base64-decoded payload piped to shell
+  description: Obfuscated commands are decoded and executed.
+  severity: high
+  mitre: [T1140, T1027, T1059.004]
+  event: process
+  match:
+    field: process.cmdline
+    op: regex
+    value: 'base64\s+(-d|--decode|-D)\b[^|;]*\|\s*(ba|da|z|k)?sh\b'
+
+- id: SBS-PROC-003
+  title: Shell with network socket on stdin/stdout (reverse shell)
+  description: A shell's standard input or output is a TCP/UDP socket. Unix-domain sockets (sshd, service managers) do not match.
+  severity: critical
+  mitre: [T1059.004, T1071]
+  event: process
+  match:
+    all:
+      - field: process.name
+        value: [sh, bash, dash, zsh, ksh, ash, busybox]
+      - any:
+          - field: process.stdin
+            value: inet
+          - field: process.stdout
+            value: inet
+
+- id: SBS-PROC-004
+  title: Reverse shell command line
+  description: Command line contains a well-known reverse shell one-liner.
+  severity: high
+  mitre: [T1059.004]
+  event: process
+  match:
+    field: process.cmdline
+    op: regex
+    value:
+      - '/dev/(tcp|udp)/[^/\s]+/\d+'
+      - '\bn(c|cat|etcat)\b.*\s-(e|c)\s'
+      - '\bsocat\b.*\bexec:'
+      - 'pty\.spawn\('
+
+- id: SBS-PROC-005
+  title: Execution from world-writable directory
+  description: A binary runs from /tmp, /var/tmp or /dev/shm, where droppers usually stage payloads.
+  severity: medium
+  mitre: [T1204.002, T1036]
+  event: process
+  match:
+    all:
+      - field: process.exe
+        op: startswith
+        value: [/tmp/, /var/tmp/, /dev/shm/]
+      - not:
+          field: process.exe
+          op: contains
+          value: [/go-build, /.mount_]
+
+- id: SBS-PROC-006
+  title: Fileless or deleted-binary execution
+  description: The process image is an anonymous memfd or has been deleted from disk.
+  severity: high
+  mitre: [T1620, T1070.004]
+  event: process
+  match:
+    any:
+      - field: process.exe
+        op: startswith
+        value: "/memfd:"
+      - field: process.exe
+        op: endswith
+        value: " (deleted)"
+
+- id: SBS-PROC-007
+  title: Credential store access
+  description: A command line references the shadow password files.
+  severity: high
+  mitre: [T1003.008]
+  event: process
+  match:
+    all:
+      - field: process.cmdline
+        op: regex
+        value: '/etc/g?shadow\b'
+      - not:
+          field: process.name
+          value: [passwd, chpasswd, useradd, usermod, userdel, groupadd, unix_chkpwd, chage, pwck, grpck]
+
+- id: SBS-PROC-008
+  title: Shell history tampering
+  description: Shell history is cleared or disabled to hide activity.
+  severity: medium
+  mitre: [T1070.003]
+  event: process
+  match:
+    field: process.cmdline
+    op: regex
+    value: 'history\s+-c\b|unset\s+HISTFILE|HISTFILE=/dev/null|HISTSIZE=0|(rm|shred|truncate)\b.*\.(bash|zsh)_history'
+
+- id: SBS-PROC-009
+  title: SUID/SGID bit set with chmod
+  description: chmod adds the setuid or setgid bit, often for privilege-escalation backdoors.
+  severity: medium
+  mitre: [T1548.001]
+  event: process
+  match:
+    all:
+      - field: process.name
+        value: chmod
+      - field: process.cmdline
+        op: regex
+        value: '(\s[ugoa]*\+[rwx]*s|\s0?[2-7][0-7]{3}\s)'
+
+- id: SBS-PROC-010
+  title: Cryptocurrency miner command line
+  description: Mining pool URL or well-known miner arguments.
+  severity: high
+  mitre: [T1496]
+  event: process
+  match:
+    field: process.cmdline
+    op: regex
+    nocase: true
+    value: 'stratum\+(tcp|ssl)://|--donate-level|\bxmrig\b|\bminerd\b|\bcpuminer\b'
+
+- id: SBS-PROC-011
+  title: Kernel module loaded with insmod
+  description: A kernel module is inserted directly; rootkits are commonly loaded this way.
+  severity: medium
+  mitre: [T1547.006]
+  event: process
+  match:
+    field: process.name
+    value: insmod
+
+- id: SBS-PROC-012
+  title: Web server spawned a shell
+  description: A web server or application runtime started a shell, a sign of a webshell or RCE.
+  severity: high
+  mitre: [T1505.003, T1190]
+  event: process
+  match:
+    all:
+      - field: parent.name
+        value: [nginx, apache2, httpd, php-fpm, php-fpm8, lighttpd, tomcat, caddy]
+      - field: process.name
+        value: [sh, bash, dash, zsh, ksh]
+
+- id: SBS-PROC-013
+  title: System log tampering
+  description: Logs under /var/log are deleted or truncated.
+  severity: medium
+  mitre: [T1070.002]
+  event: process
+  match:
+    field: process.cmdline
+    op: regex
+    value: '(truncate\s+-s\s*0\s+|\brm\s+(-\w+\s+)*|>\s*)/var/log/'

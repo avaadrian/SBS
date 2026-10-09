@@ -1,0 +1,75 @@
+# Built-in signatures. Strings prefixed with "hex:" are hex-encoded bytes.
+# The EICAR markers are hex-encoded so this file does not itself trip antivirus.
+
+hashes:
+  - sha256: 275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f
+    name: EICAR-Test-File
+    severity: low
+
+signatures:
+  - name: EICAR-Test-File.Strings
+    description: EICAR antivirus test file, including copies with trailing data.
+    severity: low
+    strings:
+      - "hex:58354f2150254041505b345c505a58353428505e2937434329377d24"
+      - "hex:45494341522d5354414e444152442d414e544956495255532d544553542d46494c45"
+    condition: all
+
+  - name: Linux.CoinMiner.Generic
+    description: Cryptocurrency miner configuration or binary.
+    severity: high
+    nocase: true
+    strings:
+      - "stratum+tcp://"
+      - "stratum+ssl://"
+      - "xmrig"
+      - "--donate-level"
+      - "cryptonight"
+      - "randomx"
+    condition: "2"
+
+  - name: Linux.Backdoor.ReverseShell.Script
+    description: Script that opens a reverse shell over /dev/tcp or netcat.
+    severity: high
+    strings:
+      - "/dev/tcp/"
+      - "nc -e /bin/sh"
+      - "nc -e /bin/bash"
+      - "ncat -e /bin/"
+      - "bash -i >&"
+      - "0>&1"
+    condition: "2"
+
+  - name: Linux.Trojan.Mirai.Strings
+    description: Strings common to Mirai-family IoT botnet builds.
+    severity: critical
+    strings:
+      - "/bin/busybox MIRAI"
+      - "/bin/busybox ECCHI"
+      - "LOLNOGTFO"
+      - "dvrHelper"
+      - "TSource Engine Query"
+    condition: "2"
+
+  - name: Linux.Rootkit.LDPreload.Generic
+    description: Userland rootkit hooking libc and hiding entries via LD_PRELOAD.
+    severity: high
+    strings:
+      - "/etc/ld.so.preload"
+      - "readdir"
+      - "dlsym"
+      - "RTLD_NEXT"
+    condition: all
+
+  - name: Webshell.PHP.Generic
+    description: PHP code that evaluates request input.
+    severity: high
+    nocase: true
+    strings:
+      - "eval($_post"
+      - "eval($_get"
+      - "eval($_request"
+      - "eval(base64_decode($_"
+      - "assert($_post"
+      - "system($_get"
+    condition: any

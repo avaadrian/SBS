@@ -1,0 +1,19 @@
+[Unit]
+Description=SBS endpoint detection agent
+After=network.target
+
+[Service]
+ExecStartPre=/bin/mkdir -p /var/log/sbs
+ExecStart=/usr/local/bin/sbs-agent run -config /etc/sbs/agent.yaml
+Restart=always
+RestartSec=2
+# Netlink process events need CAP_NET_ADMIN; reading other users' /proc needs CAP_SYS_PTRACE / DAC overrides.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+NoNewPrivileges=yes
+ProtectHome=read-only
+PrivateTmp=no
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+# Example sbs-agent configuration. Every key is optional; omitted keys use the
+# built-in defaults (see internal/agent/agent.go DefaultConfig).
+
+# auto: kernel netlink process connector (needs root), falling back to /proc polling.
+process_source: auto
+poll_interval: 100ms
+
+scan_on_exec: true     # scan the binary of every new process
+scan_on_write: true    # scan files written under watched paths
+scan_max_size: 33554432
+
+alerts: /var/log/sbs/alerts.jsonl   # "-" for stdout
+# events: /var/log/sbs/events.jsonl # full telemetry, verbose
+
+dedup: 5s
+
+# Extra rule and signature files or directories, loaded on top of the built-ins.
+rules: []
+signatures: []
+
+# Setting watch replaces the default list. Tags are what file rules match on:
+# persistence, preload, accounts, ssh, drop.
+watch:
+  - {path: /etc/cron.d, tag: persistence}
+  - {path: /etc/crontab, tag: persistence}
+  - {path: /var/spool/cron, tag: persistence, recursive: true}
+  - {path: /etc/systemd/system, tag: persistence, recursive: true}
+  - {path: /etc/init.d, tag: persistence}
+  - {path: /etc/rc.local, tag: persistence}
+  - {path: /etc/profile.d, tag: persistence}
+  - {path: /etc/ld.so.preload, tag: preload}
+  - {path: /etc/passwd, tag: accounts}
+  - {path: /etc/shadow, tag: accounts}
+  - {path: /etc/sudoers, tag: accounts}
+  - {path: /etc/sudoers.d, tag: accounts}
+  - {path: /root/.ssh, tag: ssh}
+  - {path: /tmp, tag: drop}
+  - {path: /dev/shm, tag: drop}
+  - {path: /var/tmp, tag: drop}
