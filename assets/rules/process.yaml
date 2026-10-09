@@ -41,18 +41,26 @@
 
 - id: SBS-PROC-004
   title: Reverse shell command line
-  description: Command line contains a well-known reverse shell one-liner.
+  description: >-
+    Command line contains a well-known reverse shell one-liner. The socat and
+    nc directives are matched case-insensitively, so upper-case variants such as
+    socat EXEC: / SYSTEM: are not missed.
   severity: high
   mitre: [T1059.004]
   event: process
   match:
-    field: process.cmdline
-    op: regex
-    value:
-      - '/dev/(tcp|udp)/[^/\s]+/\d+'
-      - '\bn(c|cat|etcat)\b.*\s-(e|c)\s'
-      - '\bsocat\b.*\bexec:'
-      - 'pty\.spawn\('
+    any:
+      - field: process.cmdline
+        op: regex
+        value:
+          - '/dev/(tcp|udp)/[^/\s]+/\d+'
+          - 'pty\.spawn\('
+      - field: process.cmdline
+        op: regex
+        nocase: true
+        value:
+          - '\bn(c|cat|etcat)\b.*\s-(e|c)\s'
+          - '\bsocat\b[^|]*\b(exec|system):'
 
 - id: SBS-PROC-005
   title: Execution from world-writable directory
@@ -170,3 +178,162 @@
     field: process.cmdline
     op: regex
     value: '(truncate\s+-s\s*0\s+|\brm\s+(-\w+\s+)*|>\s*)/var/log/'
+
+- id: SBS-PROC-014
+  title: Interpreter spawning a socket-backed shell (reverse shell)
+  description: >-
+    A scripting interpreter (python, perl, ruby, php, node, lua, ...) opens a
+    network socket and hands it to a shell, the interpreter form of a reverse
+    shell that rules keyed on shell names alone (SBS-PROC-003) miss because the
+    socket is created inside the interpreter. Fires only when the command line
+    shows BOTH a socket primitive AND a shell being launched, so ordinary
+    interpreter use (an app, a one-liner that only prints) does not match.
+  severity: critical
+  mitre: [T1059.004, T1059.006, T1071]
+  event: process
+  match:
+    all:
+      - field: process.name
+        value: [python, python2, python3, perl, perl5, ruby, php, php7, php8, node, nodejs, lua, lua5.1, lua5.3, lua5.4]
+      - field: process.cmdline
+        op: regex
+        value:
+          - 'socket\.socket\s*\('
+          - '\bSOCK_STREAM\b'
+          - '\bp?fsockopen\s*\('
+          - '\bTCPSocket\b'
+          - 'require\s*\(?\s*["'']socket["'']'
+          - '\bSocket\.new\b'
+          - '\bsocket\s*\(\s*(S|AF_INET|PF_INET|Socket)'
+          - 'net\.(connect|createConnection|Socket)\b'
+          - '/dev/tcp/'
+      - field: process.cmdline
+        op: regex
+        value:
+          - '/bin/(ba|da|z|k)?sh\b'
+          - '/bin/busybox\b'
+          - '\bos\.system\s*\('
+          - '\bsubprocess\.(Popen|call|run)\b'
+          - '\bpty\.spawn\s*\('
+          - '\bIO\.popen\b'
+          - '\bchild_process\b'
+          - '\b(exec|system|spawn)\s*\(\s*["''][^"'']*\b(ba|da|z|k)?sh\b'
+
+- id: SBS-PROC-015
+  title: Script interpreter running a script from a world-writable or home directory
+  description: >-
+    A shell or interpreter executes a script staged under /tmp, /var/tmp,
+    /dev/shm, /run/user or a hidden path in a home directory. SBS-PROC-005 keys
+    on process.exe, which for a shebang script is the interpreter (/bin/sh), so
+    a dropped *script* slips past it; this rule inspects the script path on the
+    command line instead. Build-tool and package-manager scratch paths are
+    excluded to keep false positives at zero.
+  severity: medium
+  mitre: [T1204.002, T1059]
+  event: process
+  match:
+    all:
+      # The process is an interpreter. A shebang script's comm is the script's
+      # own basename (e.g. ".update.sh"), not "sh", so match on the resolved
+      # exe as well as the comm.
+      - any:
+          - field: process.name
+            value: [sh, bash, dash, zsh, ksh, ash, busybox, python, python2, python3, perl, perl5, ruby, php, php7, php8, node, nodejs, lua, lua5.1, lua5.3, lua5.4]
+          - field: process.exe
+            op: regex
+            value: '/(sh|bash|dash|zsh|ksh|ash|busybox|python[0-9.]*|perl[0-9.]*|ruby|php[0-9]*|node|nodejs|lua[0-9.]*)$'
+      - field: process.cmdline
+        op: regex
+        value:
+          - '^(\S*/)?(sh|bash|dash|zsh|ksh|ash|busybox|python[0-9.]*|perl[0-9.]*|ruby|php[0-9]*|node|nodejs|lua[0-9.]*)\s+(--?\S+\s+)*(/tmp/|/var/tmp/|/dev/shm/|/run/user/[0-9]+/)\S+\.(sh|bash|dash|zsh|ksh|py|pyc|pl|rb|php|lua|js)\b'
+          - '^(\S*/)?(sh|bash|dash|zsh|ksh|ash|busybox|python[0-9.]*|perl[0-9.]*|ruby|php[0-9]*|node|nodejs|lua[0-9.]*)\s+(--?\S+\s+)*/home/[^/\s]+/(\S+/)?\.[^/\s]*\.(sh|bash|py|pyc|pl|rb|php|lua|js)\b'
+      - not:
+          field: process.cmdline
+          op: contains
+          value: [/go-build, /pip-build-, /pip-ephem-, /tmp/tmp., /ccache, /node_modules/.bin/]
+
+- id: SBS-PROC-016
+  title: Scheduled task or transient unit persistence
+  description: >-
+    A new crontab is installed from stdin or a file, a systemd transient unit /
+    scope / timer is created, or an at/batch job is scheduled. These establish
+    persistence or execution outside the watched filesystem paths. Listing or
+    editing an existing crontab (crontab -l / -e) and the at/atq query commands
+    are not flagged.
+  severity: medium
+  mitre: [T1053.002, T1053.003, T1053.006]
+  event: process
+  match:
+    any:
+      - all:
+          - field: process.name
+            value: crontab
+          - field: process.cmdline
+            op: regex
+            value:
+              - '\bcrontab\b(\s+-u\s+\S+)?\s+-\s*$'
+              - '\bcrontab\b(\s+-u\s+\S+)?\s+[^\s-]\S*\s*$'
+      - field: process.name
+        value: systemd-run
+      - all:
+          - field: process.name
+            value: [at, batch]
+          - not:
+              field: process.cmdline
+              op: regex
+              value: '\b(atq|at\s+-l\b|at\s+-c\b)'
+
+- id: SBS-PROC-017
+  title: Service enabled for persistence via systemctl
+  description: >-
+    systemctl enables, links or wires a unit so it starts automatically, a
+    service-persistence technique. Read-only and transient actions (status,
+    start, restart, daemon-reload) are not flagged.
+  severity: low
+  mitre: [T1543.002]
+  event: process
+  match:
+    all:
+      - field: process.name
+        value: [systemctl]
+      - field: process.cmdline
+        op: regex
+        value: '\bsystemctl\b[^|]*\s(enable|link|add-wants|add-requires|set-default)\b'
+
+- id: SBS-PROC-018
+  title: Shell startup or user-service file modified for persistence
+  description: >-
+    A command line appends to a shell startup file (~/.bashrc, ~/.profile, ...)
+    or writes into a per-user systemd / autostart location, both ways to run
+    attacker code on the next login or session without touching a watched
+    system path. Matches only write/redirect operations, so reading an rc file
+    is not flagged.
+  severity: medium
+  mitre: [T1546.004, T1543.002]
+  event: process
+  match:
+    field: process.cmdline
+    op: regex
+    value:
+      - '>>?\s*(~|\$HOME|/root|/home/[^/\s]+)/\.(bashrc|bash_profile|bash_login|profile|zshrc|zprofile|zlogin|kshrc|cshrc|tcshrc|login)\b'
+      - '>>?\s*(~|\$HOME|/root|/home/[^/\s]+)/\.config/(autostart|systemd/user)/'
+      - '\b(tee|install|cp|mv|cat)\b[^|]*\s(/etc/profile\.d/|(~|\$HOME|/root|/home/[^/\s]+)/\.config/systemd/user/)\S'
+
+- id: SBS-PROC-019
+  title: LD_PRELOAD hijack via command line
+  description: >-
+    LD_PRELOAD is set to a library under a writable or home directory, or a
+    library path is written into an ld.so.preload file. Both force attacker code
+    into other processes (userland rootkit). Preloading a system library under
+    /usr or /lib is not flagged, so legitimate preloads stay quiet.
+  severity: high
+  mitre: [T1574.006]
+  event: process
+  match:
+    any:
+      - field: process.cmdline
+        op: regex
+        value: 'LD_PRELOAD=\S*(/tmp/|/var/tmp/|/dev/shm/|/run/user/|/home/|~/|\./)\S*\.so'
+      - field: process.cmdline
+        op: regex
+        value: '>>?\s*\S*ld\.so\.preload'

@@ -19,6 +19,7 @@ func defaultWatch() []fs.Watch {
 		{Path: "/etc/sudoers", Tag: "accounts"},
 		{Path: "/etc/sudoers.d", Tag: "accounts"},
 		{Path: "/root/.ssh", Tag: "ssh"},
+		{Path: "/home", Tag: "ssh", Recursive: true}, // authorized_keys in any user home
 		{Path: "/tmp", Tag: "drop"},
 		{Path: "/dev/shm", Tag: "drop"},
 		{Path: "/var/tmp", Tag: "drop"},

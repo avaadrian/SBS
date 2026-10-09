@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/avaadrian/sbs/internal/anomaly"
 	"github.com/avaadrian/sbs/internal/api"
+	"github.com/avaadrian/sbs/internal/collector/ebpf"
 	"github.com/avaadrian/sbs/internal/collector/fs"
 	"github.com/avaadrian/sbs/internal/collector/proc"
 	"github.com/avaadrian/sbs/internal/event"
@@ -46,6 +48,10 @@ type ResponseConfig struct {
 	Enabled       bool   `yaml:"enabled"`
 	MinSeverity   string `yaml:"min_severity"` // act/propose at or above this severity
 	QuarantineDir string `yaml:"quarantine_dir"`
+	// MaxAutoActionsPerMinute caps automatic kill/quarantine actions in auto
+	// mode. When exceeded, the circuit breaker downgrades the agent to ask.
+	// 0 (unset) uses the default of 10; a negative value disables the breaker.
+	MaxAutoActionsPerMinute int `yaml:"max_auto_actions_per_minute"`
 }
 
 // mode returns the effective response mode.
@@ -70,6 +76,9 @@ type ServerConfig struct {
 	Token             string        `yaml:"token"`
 	SpoolDir          string        `yaml:"spool_dir"`
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
+	// CAFile is an optional PEM CA bundle used to verify the server's TLS
+	// certificate, for a server with a private or self-signed CA.
+	CAFile string `yaml:"ca_file"`
 }
 
 // AnomalyConfig controls the behavioral anomaly layer.
@@ -80,7 +89,8 @@ type AnomalyConfig struct {
 
 // Config is the agent configuration file.
 type Config struct {
-	// ProcessSource is "auto" (netlink, falling back to procfs), "netlink" or "procfs".
+	// ProcessSource is "auto" (ebpf if built, else netlink, else procfs),
+	// "ebpf", "netlink" or "procfs".
 	ProcessSource string        `yaml:"process_source"`
 	PollInterval  time.Duration `yaml:"poll_interval"`
 	Watch         []fs.Watch    `yaml:"watch"`
@@ -119,7 +129,7 @@ func DefaultConfig() Config {
 		ScanOnWrite:   true,
 		ScanMaxSize:   scanner.DefaultMaxSize,
 		Dedup:         5 * time.Second,
-		Response:      ResponseConfig{Mode: ModeAsk, MinSeverity: "critical", QuarantineDir: "/var/lib/sbs/quarantine"},
+		Response:      ResponseConfig{Mode: ModeAsk, MinSeverity: "critical", QuarantineDir: "/var/lib/sbs/quarantine", MaxAutoActionsPerMinute: 10},
 		Anomaly:       AnomalyConfig{Enabled: true, StateDir: "/var/lib/sbs"},
 		Watch:         defaultWatch(),
 	}
@@ -149,7 +159,7 @@ type Stats struct {
 // Agent is a running EDR agent.
 type Agent struct {
 	cfg     Config
-	rules   *rules.Engine
+	rules   atomic.Pointer[rules.Engine] // hot-swappable: read by Handle, replaced on rule reload
 	scan    *scanner.Scanner
 	alerts  io.Writer
 	events  io.Writer
@@ -165,24 +175,33 @@ type Agent struct {
 	trans    *transport.Client
 	host     api.Host
 	started  time.Time
-	respMin  int    // severity rank threshold for response, -1 = disabled (off)
-	respMode string // off | ask | auto
+	respMin  int        // severity rank threshold for response, -1 = disabled
+	resp     *respState // live effective mode + auto-response circuit breaker
+
+	// Built-in + file rules, kept so the engine can be rebuilt with custom
+	// rules fetched from the server. Flattened; validated unique in New.
+	builtins []*rules.Rule
+	// Custom rule state, touched only on the heartbeat goroutine.
+	rulesVersion string // version of the loaded custom rule set, "" if none
+	rulesErr     string // last custom-rule load error, "" if none
 }
 
 // New builds an agent. defaultRules/defaultSigs are the built-in sets.
 func New(cfg Config, defaultRules []*rules.Rule, defaultSigs func(*scanner.Scanner) error) (*Agent, error) {
-	sets := [][]*rules.Rule{}
+	// builtins is every locally-sourced rule (defaults + configured files). It
+	// is kept so the engine can be rebuilt as builtins + custom server rules.
+	var builtins []*rules.Rule
 	if !cfg.NoDefaults {
-		sets = append(sets, defaultRules)
+		builtins = append(builtins, defaultRules...)
 	}
 	for _, p := range cfg.RulePaths {
 		rs, err := rules.LoadPath(p)
 		if err != nil {
 			return nil, err
 		}
-		sets = append(sets, rs)
+		builtins = append(builtins, rs...)
 	}
-	eng, err := rules.NewEngine(sets...)
+	eng, err := rules.NewEngine(builtins)
 	if err != nil {
 		return nil, err
 	}
@@ -200,8 +219,9 @@ func New(cfg Config, defaultRules []*rules.Rule, defaultSigs func(*scanner.Scann
 			return nil, err
 		}
 	}
-	a := &Agent{cfg: cfg, rules: eng, scan: sc, dedup: map[string]time.Time{}, self: os.Getpid(),
-		started: time.Now(), respMin: -1}
+	a := &Agent{cfg: cfg, scan: sc, dedup: map[string]time.Time{}, self: os.Getpid(),
+		started: time.Now(), respMin: -1, builtins: builtins}
+	a.rules.Store(eng)
 	if a.alerts, err = a.open(cfg.AlertsPath); err != nil {
 		return nil, err
 	}
@@ -213,15 +233,28 @@ func New(cfg Config, defaultRules []*rules.Rule, defaultSigs func(*scanner.Scann
 	if cfg.Anomaly.Enabled {
 		a.anom = anomaly.New(cfg.Anomaly.StateDir)
 	}
-	a.respMode = cfg.Response.mode()
-	switch a.respMode {
+	mode := cfg.Response.mode()
+	switch mode {
 	case ModeOff, ModeAsk, ModeAuto:
 	default:
-		return nil, fmt.Errorf("response.mode: unknown mode %q (want off|ask|auto)", a.respMode)
+		return nil, fmt.Errorf("response.mode: unknown mode %q (want off|ask|auto)", mode)
 	}
-	if a.respMode != ModeOff {
+	maxAuto := cfg.Response.MaxAutoActionsPerMinute
+	if maxAuto == 0 { // unset => default; negative explicitly disables the breaker
+		maxAuto = 10
+	}
+	a.resp = newRespState(mode, maxAuto)
+	// Build the actioner and severity threshold whenever response could ever
+	// run: the configured mode is not off, or a server is present and may
+	// override the mode to ask/auto at runtime. With no server and mode off,
+	// the actioner stays nil and respond() is a no-op, exactly as before.
+	if mode != ModeOff || cfg.Server.URL != "" {
 		a.actioner = response.NewActioner()
-		r, ok := severityRank[cfg.Response.MinSeverity]
+		sev := cfg.Response.MinSeverity
+		if sev == "" {
+			sev = "critical"
+		}
+		r, ok := severityRank[sev]
 		if !ok {
 			return nil, fmt.Errorf("response.min_severity: unknown severity %q", cfg.Response.MinSeverity)
 		}
@@ -236,6 +269,7 @@ func New(cfg Config, defaultRules []*rules.Rule, defaultSigs func(*scanner.Scann
 		a.trans, err = transport.New(transport.Config{
 			ServerURL: cfg.Server.URL, Token: cfg.Server.Token, Host: a.host,
 			SpoolDir: spool, HeartbeatInterval: cfg.Server.HeartbeatInterval, Insecure: cfg.Server.Insecure,
+			CAFile: cfg.Server.CAFile,
 		})
 		if err != nil {
 			return nil, err
@@ -257,7 +291,7 @@ func (a *Agent) open(path string) (io.Writer, error) {
 }
 
 // Rules returns the number of active rules; Signatures the loaded signature counts.
-func (a *Agent) Rules() int                     { return a.rules.Len() }
+func (a *Agent) Rules() int                     { return a.rules.Load().Len() }
 func (a *Agent) Signatures() (hashes, strs int) { return a.scan.Count() }
 
 // Run starts all collectors and processes events until ctx is cancelled.
@@ -275,15 +309,23 @@ func (a *Agent) Run(ctx context.Context, ready func()) error {
 	skip := func(pid int) bool { return pid == a.self }
 
 	switch src := a.cfg.ProcessSource; src {
-	case "", "auto", "netlink":
+	case "", "auto":
+		// Prefer eBPF (fewest missed short-lived processes), then netlink, then
+		// polling. eBPF is only present when built with -tags ebpf; when it is
+		// not, Open returns ErrNotBuilt and we skip it silently.
+		if c, err := ebpf.Open(); err == nil {
+			a.Source = "ebpf"
+			a.closers = append(a.closers, c)
+			go func() { errc <- c.Run(ctx, events, skip) }()
+			break
+		} else if !errors.Is(err, ebpf.ErrNotBuilt) {
+			log.Printf("agent: ebpf collector unavailable: %v", err)
+		}
 		nl, err := proc.OpenNetlink()
 		if err == nil {
 			a.Source = "netlink"
 			go func() { errc <- nl.Run(ctx, events, skip) }()
 			break
-		}
-		if src == "netlink" {
-			return err
 		}
 		log.Printf("agent: %v; falling back to procfs polling", err)
 		fallthrough
@@ -291,6 +333,21 @@ func (a *Agent) Run(ctx context.Context, ready func()) error {
 		a.Source = "procfs"
 		p := &proc.Poller{Interval: a.cfg.PollInterval}
 		go func() { errc <- p.Run(ctx, events, skip) }()
+	case "netlink":
+		nl, err := proc.OpenNetlink()
+		if err != nil {
+			return err
+		}
+		a.Source = "netlink"
+		go func() { errc <- nl.Run(ctx, events, skip) }()
+	case "ebpf":
+		c, err := ebpf.Open()
+		if err != nil {
+			return err
+		}
+		a.Source = "ebpf"
+		a.closers = append(a.closers, c)
+		go func() { errc <- c.Run(ctx, events, skip) }()
 	default:
 		return fmt.Errorf("unknown process_source %q", src)
 	}
@@ -340,7 +397,7 @@ func (a *Agent) Handle(ev *event.Event) {
 	if a.events != nil {
 		a.write(a.events, ev)
 	}
-	alerts = append(alerts, a.rules.Evaluate(ev)...)
+	alerts = append(alerts, a.rules.Load().Evaluate(ev)...)
 	if a.anom != nil {
 		if al := a.anom.Observe(ev); al != nil {
 			alerts = append(alerts, al)
@@ -361,28 +418,39 @@ func (a *Agent) Handle(ev *event.Event) {
 	}
 }
 
-// respond handles an alert at or above the configured severity threshold.
-// In auto mode it executes the response actions and records the outcomes; in
-// ask mode it only records which actions it proposes, leaving execution to an
-// operator approval (delivered back as a server command).
+// respond handles an alert at or above the configured severity threshold, using
+// the current effective mode (which the server can override at runtime). In
+// auto mode it executes the response actions and records the outcomes; in ask
+// mode it only records which actions it proposes, leaving execution to an
+// operator approval (delivered back as a server command). The auto-response
+// circuit breaker can downgrade auto to ask mid-stream: when executing an
+// alert's actions would exceed the per-minute cap, this and later alerts are
+// handled as proposals instead.
 func (a *Agent) respond(al *event.Alert) {
-	if a.actioner == nil || a.respMin < 0 || severityRank[al.Severity] < a.respMin {
+	mode := a.resp.mode()
+	if a.actioner == nil || mode == ModeOff || a.respMin < 0 || severityRank[al.Severity] < a.respMin {
 		return
 	}
 	actions := proposedActions(al) // ordered list of {type, target}
-	if a.respMode == ModeAsk {
-		for _, act := range actions {
-			al.Proposed = append(al.Proposed, act.kind)
+	if mode == ModeAuto {
+		if ok, tripped := a.resp.reserveAuto(len(actions), time.Now()); ok {
+			for _, act := range actions {
+				switch act.kind {
+				case api.CmdKill:
+					al.Actions = append(al.Actions, a.actioner.Kill(act.pid))
+				case api.CmdQuarantine:
+					al.Actions = append(al.Actions, a.actioner.Quarantine(act.path, a.cfg.Response.QuarantineDir))
+				}
+			}
+			return
+		} else if tripped {
+			log.Printf("agent: auto-response circuit breaker tripped (> %d actions/min): downgrading to ask",
+				a.resp.maxPerMin)
 		}
-		return
+		// Breaker is tripped: fall through and handle this alert as a proposal.
 	}
 	for _, act := range actions {
-		switch act.kind {
-		case api.CmdKill:
-			al.Actions = append(al.Actions, a.actioner.Kill(act.pid))
-		case api.CmdQuarantine:
-			al.Actions = append(al.Actions, a.actioner.Quarantine(act.path, a.cfg.Response.QuarantineDir))
-		}
+		al.Proposed = append(al.Proposed, act.kind)
 	}
 }
 

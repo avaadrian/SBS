@@ -2,7 +2,7 @@
 # built-in defaults (see internal/agent/agent.go DefaultConfig).
 
 # auto: kernel netlink process connector (needs root), falling back to /proc polling.
-process_source: auto
+process_source: auto             # auto (ebpf if built, else netlink, else procfs) | ebpf | netlink | procfs
 poll_interval: 100ms
 
 scan_on_exec: true     # scan the binary of every new process

@@ -31,6 +31,7 @@ func main() {
 	maxFP := flag.Int("max-fp", -1, "exit 1 if there are more false positives than this (-1 = no limit)")
 	keep := flag.Bool("keep", false, "keep the sandbox directory for inspection")
 	heldout := flag.Bool("heldout", false, "run the independent held-out scenario set instead of the built-in one")
+	heldout2 := flag.Bool("heldout2", false, "run the second (blind) held-out scenario set")
 	flag.Parse()
 
 	path, err := findAgent(*agent)
@@ -38,7 +39,7 @@ func main() {
 		log.Fatal(err)
 	}
 	rep, err := bench.Run(bench.Options{
-		AgentPath: path, Source: *source, Timeout: *timeout, LoadExecs: *load, Heldout: *heldout,
+		AgentPath: path, Source: *source, Timeout: *timeout, LoadExecs: *load, Heldout: *heldout, Heldout2: *heldout2,
 		Only: *only, Keep: *keep, Log: os.Stdout,
 	})
 	if err != nil {

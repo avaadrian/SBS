@@ -3,6 +3,7 @@
 // the dashboard and JSON API bound to localhost.
 //
 //	sbs-server [-addr 127.0.0.1:8080] [-db sbs.db] [-token TOKEN]
+//	           [-console-token TOKEN] [-tls-cert FILE -tls-key FILE]
 //	           [-llm off|ollama|anthropic] [-auto-triage high]
 package main
 
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,7 +40,10 @@ func run() error {
 	llmModel := flag.String("llm-model", "", "model id (default: provider's default)")
 	llmURL := flag.String("llm-url", "", "Ollama server URL (default http://localhost:11434) or Anthropic base URL")
 	autoTriage := flag.String("auto-triage", "high", "auto-triage alerts at or above this severity (info|low|medium|high|critical; empty to disable)")
-	insecure := flag.Bool("insecure-no-auth", false, "allow running with no agent token (open agent endpoints — testing only)")
+	consoleToken := flag.String("console-token", "", "console operator token (or SBS_CONSOLE_TOKEN); empty leaves the console open")
+	tlsCert := flag.String("tls-cert", "", "TLS certificate file (serves HTTPS with -tls-key)")
+	tlsKey := flag.String("tls-key", "", "TLS private key file (serves HTTPS with -tls-cert)")
+	insecure := flag.Bool("insecure-no-auth", false, "allow running with no agent/console token (open endpoints — testing only)")
 	flag.Parse()
 
 	if *token == "" {
@@ -49,6 +54,19 @@ func run() error {
 	}
 	if *token == "" {
 		log.Print("warning: -insecure-no-auth set; agent endpoints are unauthenticated")
+	}
+
+	if *consoleToken == "" {
+		*consoleToken = os.Getenv("SBS_CONSOLE_TOKEN")
+	}
+	if (*tlsCert == "") != (*tlsKey == "") {
+		return errors.New("-tls-cert and -tls-key must be given together")
+	}
+	servingTLS := *tlsCert != "" && *tlsKey != ""
+	// A non-loopback bind with an open console would expose the console to the
+	// network; refuse unless the operator explicitly opts out.
+	if !isLoopbackAddr(*addr) && *consoleToken == "" && !*insecure {
+		return errors.New("refusing to bind a non-loopback address with no console token: pass -console-token/SBS_CONSOLE_TOKEN, or -insecure-no-auth to allow an open console")
 	}
 
 	analyst, err := llm.New(llm.Config{Provider: *llmMode, Model: *llmModel, BaseURL: *llmURL})
@@ -67,6 +85,8 @@ func run() error {
 
 	srv := server.New(st, server.Config{
 		AgentToken:            *token,
+		ConsoleToken:          *consoleToken,
+		TLS:                   servingTLS,
 		Analyst:               analyst,
 		AutoTriageMinSeverity: *autoTriage,
 	})
@@ -82,8 +102,16 @@ func run() error {
 
 	errc := make(chan error, 1)
 	go func() {
-		log.Printf("listening on %s (db=%s, llm=%s, auto-triage=%q)", *addr, *dbPath, *llmMode, *autoTriage)
-		errc <- httpSrv.ListenAndServe()
+		scheme := "http"
+		if servingTLS {
+			scheme = "https"
+		}
+		log.Printf("listening on %s://%s (db=%s, llm=%s, auto-triage=%q)", scheme, *addr, *dbPath, *llmMode, *autoTriage)
+		if servingTLS {
+			errc <- httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey)
+		} else {
+			errc <- httpSrv.ListenAndServe()
+		}
 	}()
 
 	select {
@@ -102,4 +130,21 @@ func run() error {
 		srv.Wait() // let in-flight background triage finish
 		return nil
 	}
+}
+
+// isLoopbackAddr reports whether a listen address binds only the loopback
+// interface. An empty host (e.g. ":8080", all interfaces) is not loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

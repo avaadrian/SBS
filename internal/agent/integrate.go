@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"net"
 	"os"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/avaadrian/sbs/internal/api"
+	"github.com/avaadrian/sbs/internal/rules"
 	"github.com/avaadrian/sbs/internal/scanner"
 )
 
@@ -104,26 +106,90 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 
 func (a *Agent) sendHeartbeat(ctx context.Context) {
 	hashes, strs := a.Signatures()
+	mode := a.resp.mode()
+	// Report the current effective mode, not the configured one, so the console
+	// shows reality. a.host is written once before the goroutines start, so this
+	// value copy is race-free.
+	host := a.host
+	host.ResponseMode = mode
 	hb := api.Heartbeat{
-		Host:            a.host,
-		Time:            time.Now().UTC(),
-		UptimeSeconds:   time.Since(a.started).Seconds(),
-		Events:          a.Stats.Events.Load(),
-		Alerts:          a.Stats.Alerts.Load(),
-		Scanned:         a.Stats.Scanned.Load(),
-		Rules:           a.Rules(),
-		Signatures:      hashes + strs,
-		ResponseEnabled: a.actioner != nil,
-		RemoteCommands:  a.cfg.RemoteCommands,
-		SpoolBacklog:    a.trans.Backlog(),
+		Host:                host,
+		Time:                time.Now().UTC(),
+		UptimeSeconds:       time.Since(a.started).Seconds(),
+		Events:              a.Stats.Events.Load(),
+		Alerts:              a.Stats.Alerts.Load(),
+		Scanned:             a.Stats.Scanned.Load(),
+		Rules:               a.Rules(),
+		Signatures:          hashes + strs,
+		ResponseEnabled:     a.actioner != nil && mode != ModeOff,
+		RemoteCommands:      a.cfg.RemoteCommands,
+		SpoolBacklog:        a.trans.Backlog(),
+		RulesVersion:        a.rulesVersion,
+		RulesError:          a.rulesErr,
+		AutoResponseTripped: a.resp.breakerTripped(),
 	}
 	resp, err := a.trans.Heartbeat(ctx, hb)
 	if err != nil || resp == nil {
 		return
 	}
+	a.applyResponseMode(resp.ResponseMode)
+	a.reloadRules(ctx, resp.RulesVersion)
 	for _, cmd := range resp.Commands {
 		a.runCommand(ctx, cmd)
 	}
+}
+
+// applyResponseMode applies a server-sent effective-mode override (off|ask|auto),
+// reverting to the configured mode when empty. A non-empty override also clears
+// the auto-response circuit breaker. It logs any change.
+func (a *Agent) applyResponseMode(mode string) {
+	if mode != "" {
+		switch mode {
+		case ModeOff, ModeAsk, ModeAuto:
+		default:
+			log.Printf("agent: ignoring invalid server response mode %q", mode)
+			return
+		}
+	}
+	from, to, changed := a.resp.applyOverride(mode)
+	if !changed {
+		return
+	}
+	if mode == "" {
+		log.Printf("agent: response mode %s -> %s (server override cleared)", from, to)
+	} else {
+		log.Printf("agent: response mode %s -> %s (server override)", from, to)
+	}
+}
+
+// reloadRules fetches and hot-swaps the custom rule set when the server reports
+// a version the agent does not have loaded. On any fetch/parse/compile failure
+// the current engine is kept and the error is remembered for the next heartbeat.
+// It runs only on the heartbeat goroutine, so rulesVersion/rulesErr are unguarded.
+func (a *Agent) reloadRules(ctx context.Context, serverVersion string) {
+	if serverVersion == a.rulesVersion {
+		return // up to date (covers both empty)
+	}
+	rs, err := a.trans.FetchRules(ctx)
+	if err != nil {
+		a.rulesErr = err.Error()
+		return
+	}
+	custom, err := rules.Parse([]byte(rs.YAML), "server rules "+rs.Version)
+	if err != nil {
+		a.rulesErr = err.Error()
+		return
+	}
+	eng, err := rules.NewEngine(a.builtins, custom)
+	if err != nil {
+		a.rulesErr = err.Error()
+		return
+	}
+	a.rules.Store(eng)
+	a.rulesVersion = rs.Version
+	a.rulesErr = ""
+	log.Printf("agent: loaded custom rule set version %q (%d custom rules, %d active total)",
+		rs.Version, len(custom), eng.Len())
 }
 
 // runCommand executes a server-issued command and reports the result. When
@@ -134,7 +200,7 @@ func (a *Agent) runCommand(ctx context.Context, cmd api.Command) {
 	// kill/quarantine are accepted when remote commands are on, or in ask mode
 	// (where such a command is the operator's approval of the agent's own
 	// proposal). scan is only ever accepted with remote commands enabled.
-	approval := a.respMode == ModeAsk && (cmd.Type == api.CmdKill || cmd.Type == api.CmdQuarantine)
+	approval := a.resp.mode() == ModeAsk && (cmd.Type == api.CmdKill || cmd.Type == api.CmdQuarantine)
 	if !a.cfg.RemoteCommands && !approval {
 		res.Error = "remote commands disabled on agent"
 		a.trans.CommandResult(ctx, res)

@@ -1,15 +1,24 @@
 [Unit]
 Description=SBS endpoint detection agent
+Documentation=https://github.com/avaadrian/sbs
 After=network.target
 
 [Service]
-ExecStartPre=/bin/mkdir -p /var/log/sbs
 ExecStart=/usr/local/bin/sbs-agent run -config /etc/sbs/agent.yaml
 Restart=always
 RestartSec=2
-# Netlink process events need CAP_NET_ADMIN; reading other users' /proc needs CAP_SYS_PTRACE / DAC overrides.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
-AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+TimeoutStopSec=10
+
+# systemd creates and owns these (root), matching the config's defaults:
+#   /var/lib/sbs  — anomaly state + quarantine + upload spool
+#   /var/log/sbs  — alert log
+StateDirectory=sbs
+LogsDirectory=sbs
+
+# Netlink process events need CAP_NET_ADMIN; reading other users' /proc needs
+# CAP_SYS_PTRACE / DAC overrides. The agent legitimately runs as root with these.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_KILL
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_KILL
 NoNewPrivileges=yes
 ProtectHome=read-only
 PrivateTmp=no

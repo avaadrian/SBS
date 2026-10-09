@@ -20,6 +20,10 @@ import (
 // ErrNotFound is returned when a requested row does not exist.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrDuplicate is returned when a custom rule's rule_id collides with one
+// already stored.
+var ErrDuplicate = errors.New("store: duplicate rule id")
+
 // Command statuses.
 const (
 	StatusPending = "pending"
@@ -41,10 +45,34 @@ type Store struct {
 }
 
 // Host is a stored endpoint with its first/last-seen timestamps.
+//
+// DesiredMode is the operator override pushed to the agent ("" when none);
+// RulesVersion, RulesError and AutoResponseTripped are the agent's own status
+// as of its last heartbeat (what rule set it has loaded, whether it failed to
+// load, and whether its auto-response circuit breaker has tripped).
 type Host struct {
 	api.Host
-	FirstSeen time.Time `json:"first_seen"`
-	LastSeen  time.Time `json:"last_seen"`
+	DesiredMode         string    `json:"desired_mode"`
+	RulesVersion        string    `json:"rules_version"`
+	RulesError          string    `json:"rules_error"`
+	AutoResponseTripped bool      `json:"auto_response_tripped"`
+	FirstSeen           time.Time `json:"first_seen"`
+	LastSeen            time.Time `json:"last_seen"`
+}
+
+// CustomRule is one operator- or AI-authored detection rule stored by the
+// server and distributed to agents. YAML is the single-rule YAML as posted;
+// RuleID/Title/Severity/Event are extracted from it for display.
+type CustomRule struct {
+	ID        string    `json:"id"`
+	RuleID    string    `json:"rule_id"`
+	Title     string    `json:"title"`
+	Severity  string    `json:"severity"`
+	Event     string    `json:"event"`
+	YAML      string    `json:"yaml"`
+	Enabled   bool      `json:"enabled"`
+	Source    string    `json:"source"` // manual | ai
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Alert is a stored alert together with its triage result (raw JSON, if any)
@@ -75,6 +103,10 @@ CREATE TABLE IF NOT EXISTS hosts (
 	agent_version  TEXT NOT NULL DEFAULT '',
 	process_source TEXT NOT NULL DEFAULT '',
 	response_mode  TEXT NOT NULL DEFAULT '',
+	desired_mode   TEXT NOT NULL DEFAULT '',
+	rules_version  TEXT NOT NULL DEFAULT '',
+	rules_error    TEXT NOT NULL DEFAULT '',
+	auto_tripped   INTEGER NOT NULL DEFAULT 0,
 	first_seen     INTEGER NOT NULL,
 	last_seen      INTEGER NOT NULL,
 	ips            TEXT NOT NULL DEFAULT '[]'
@@ -112,6 +144,17 @@ CREATE TABLE IF NOT EXISTS commands (
 	updated  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_commands_host ON commands(host_id, status);
+CREATE TABLE IF NOT EXISTS custom_rules (
+	id       TEXT PRIMARY KEY,
+	rule_id  TEXT NOT NULL UNIQUE,
+	title    TEXT NOT NULL DEFAULT '',
+	severity TEXT NOT NULL DEFAULT '',
+	event    TEXT NOT NULL DEFAULT '',
+	yaml     TEXT NOT NULL DEFAULT '',
+	enabled  INTEGER NOT NULL DEFAULT 1,
+	source   TEXT NOT NULL DEFAULT '',
+	created  INTEGER NOT NULL
+);
 `
 
 // Open opens (creating if needed) the database at path. An empty path or
@@ -142,6 +185,10 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE alerts ADD COLUMN proposed_json TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE alerts ADD COLUMN approval TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE hosts ADD COLUMN response_mode TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE hosts ADD COLUMN desired_mode TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE hosts ADD COLUMN rules_version TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE hosts ADD COLUMN rules_error TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE hosts ADD COLUMN auto_tripped INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := db.Exec(mig); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
@@ -353,7 +400,8 @@ func (s *Store) SetTriage(alertID string, triageJSON []byte) error {
 // ListHosts returns every known host, most recently seen first.
 func (s *Store) ListHosts() ([]*Host, error) {
 	rows, err := s.db.Query(`
-SELECT id, hostname, os, kernel, arch, agent_version, process_source, response_mode, first_seen, last_seen, ips
+SELECT id, hostname, os, kernel, arch, agent_version, process_source, response_mode,
+       desired_mode, rules_version, rules_error, auto_tripped, first_seen, last_seen, ips
 FROM hosts ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, err
@@ -362,21 +410,68 @@ FROM hosts ORDER BY last_seen DESC`)
 	var out []*Host
 	for rows.Next() {
 		var (
-			h     Host
-			first int64
-			last  int64
-			ips   string
+			h       Host
+			first   int64
+			last    int64
+			tripped int64
+			ips     string
 		)
 		if err := rows.Scan(&h.ID, &h.Hostname, &h.OS, &h.Kernel, &h.Arch, &h.AgentVersion,
-			&h.ProcessSource, &h.ResponseMode, &first, &last, &ips); err != nil {
+			&h.ProcessSource, &h.ResponseMode, &h.DesiredMode, &h.RulesVersion, &h.RulesError,
+			&tripped, &first, &last, &ips); err != nil {
 			return nil, err
 		}
+		h.AutoResponseTripped = tripped != 0
 		h.FirstSeen = time.Unix(0, first).UTC()
 		h.LastSeen = time.Unix(0, last).UTC()
 		_ = json.Unmarshal([]byte(ips), &h.IPs)
 		out = append(out, &h)
 	}
 	return out, rows.Err()
+}
+
+// SetDesiredMode sets a host's operator-chosen response mode override. An empty
+// mode clears the override. The host must already be known (ErrNotFound
+// otherwise).
+func (s *Store) SetDesiredMode(hostID, mode string) error {
+	res, err := s.db.Exec("UPDATE hosts SET desired_mode = ? WHERE id = ?", mode, hostID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetDesiredMode returns a host's operator override ("" when none or the host
+// is unknown).
+func (s *Store) GetDesiredMode(hostID string) (string, error) {
+	var mode string
+	err := s.db.QueryRow("SELECT desired_mode FROM hosts WHERE id = ?", hostID).Scan(&mode)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return mode, err
+}
+
+// SetHostStatus records the agent-reported fields from a heartbeat (the rule
+// set version it has loaded, any load error, and whether its auto-response
+// circuit breaker has tripped). The host must already be known.
+func (s *Store) SetHostStatus(hostID, rulesVersion, rulesError string, autoTripped bool) error {
+	tripped := 0
+	if autoTripped {
+		tripped = 1
+	}
+	res, err := s.db.Exec("UPDATE hosts SET rules_version = ?, rules_error = ?, auto_tripped = ? WHERE id = ?",
+		rulesVersion, rulesError, tripped, hostID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // CountsBySeverity returns alert counts grouped by severity. A zero since
@@ -478,6 +573,132 @@ ORDER BY created ASC, rowid ASC`, hostID, StatusPending, StatusSent, cutoff)
 		return nil, err
 	}
 	return cmds, nil
+}
+
+const customRuleCols = `id, rule_id, title, severity, event, yaml, enabled, source, created`
+
+// AddCustomRule stores a new custom rule. It returns ErrDuplicate if the
+// rule_id already belongs to another stored custom rule.
+func (s *Store) AddCustomRule(cr CustomRule) error {
+	created := cr.CreatedAt
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	enabled := 0
+	if cr.Enabled {
+		enabled = 1
+	}
+	_, err := s.db.Exec(`
+INSERT INTO custom_rules (`+customRuleCols+`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cr.ID, cr.RuleID, cr.Title, cr.Severity, cr.Event, cr.YAML, enabled, cr.Source, created.UnixNano())
+	if err != nil {
+		// UNIQUE(rule_id) violation -> duplicate.
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
+			return ErrDuplicate
+		}
+		return fmt.Errorf("store: add custom rule: %w", err)
+	}
+	return nil
+}
+
+// ListCustomRules returns every stored custom rule, newest first.
+func (s *Store) ListCustomRules() ([]*CustomRule, error) {
+	rows, err := s.db.Query("SELECT " + customRuleCols + " FROM custom_rules ORDER BY created DESC, rowid DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*CustomRule{}
+	for rows.Next() {
+		cr, err := scanCustomRule(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cr)
+	}
+	return out, rows.Err()
+}
+
+// GetCustomRule returns one custom rule by its id, or ErrNotFound.
+func (s *Store) GetCustomRule(id string) (*CustomRule, error) {
+	rows, err := s.db.Query("SELECT "+customRuleCols+" FROM custom_rules WHERE id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, ErrNotFound
+	}
+	return scanCustomRule(rows)
+}
+
+// SetCustomRuleEnabled flips a rule's enabled flag and returns the updated rule.
+func (s *Store) SetCustomRuleEnabled(id string, enabled bool) (*CustomRule, error) {
+	e := 0
+	if enabled {
+		e = 1
+	}
+	res, err := s.db.Exec("UPDATE custom_rules SET enabled = ? WHERE id = ?", e, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrNotFound
+	}
+	return s.GetCustomRule(id)
+}
+
+// DeleteCustomRule removes a rule by id, or returns ErrNotFound.
+func (s *Store) DeleteCustomRule(id string) error {
+	res, err := s.db.Exec("DELETE FROM custom_rules WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// EnabledRuleYAML returns the enabled custom rules' YAML concatenated as one
+// YAML list, ordered by rule_id so the result is stable for the same content.
+func (s *Store) EnabledRuleYAML() (string, error) {
+	rows, err := s.db.Query("SELECT yaml FROM custom_rules WHERE enabled = 1 ORDER BY rule_id ASC")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var parts []string
+	for rows.Next() {
+		var y string
+		if err := rows.Scan(&y); err != nil {
+			return "", err
+		}
+		parts = append(parts, strings.TrimRight(y, "\n"))
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+func scanCustomRule(rows *sql.Rows) (*CustomRule, error) {
+	var (
+		cr      CustomRule
+		enabled int64
+		created int64
+	)
+	if err := rows.Scan(&cr.ID, &cr.RuleID, &cr.Title, &cr.Severity, &cr.Event,
+		&cr.YAML, &enabled, &cr.Source, &created); err != nil {
+		return nil, err
+	}
+	cr.Enabled = enabled != 0
+	cr.CreatedAt = time.Unix(0, created).UTC()
+	return &cr, nil
 }
 
 // CompleteCommand records a command's outcome, setting status to "done" or

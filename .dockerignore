@@ -1,0 +1,36 @@
+# Keep the build context small and free of secrets/artifacts.
+# The build needs: go.mod, go.sum, cmd/, internal/, assets/, configs/.
+
+.git
+.github
+.gitignore
+
+# Build outputs
+bin/
+dist/
+reports/
+*.test
+*.out
+coverage*
+
+# Local secrets / env
+.env
+.env.*
+!.env.example
+
+# Docs, deploy manifests and scripts are not needed to compile the binaries.
+deploy/
+scripts/
+docs/
+*.md
+
+# Docker / compose files themselves
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Editor / OS cruft
+.vscode/
+.idea/
+*.swp
+.DS_Store

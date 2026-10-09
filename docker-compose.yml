@@ -1,0 +1,107 @@
+# SBS server + local Ollama AI analyst.
+#
+#   cp .env.example .env            # then fill in strong tokens (see scripts/gen-tokens.sh)
+#   docker compose up -d --build
+#   docker compose exec ollama ollama pull llama3.1   # one-time: fetch the triage model
+#
+# The console is published on 127.0.0.1 only. To reach it from another host, put a
+# TLS-terminating reverse proxy in front of it (see deploy/README.md), or enable the
+# server's own TLS once that build supports -tls-cert/-tls-key (docs/CONSOLE_API.md).
+
+name: sbs
+
+services:
+  sbs-server:
+    build:
+      context: .
+      target: sbs-server
+      args:
+        VERSION: ${SBS_VERSION:-docker}
+    image: sbs-server:${SBS_VERSION:-local}
+    restart: unless-stopped
+    ports:
+      # host:container — bound to localhost so the (currently unauthenticated)
+      # console is not exposed on the network.
+      - "127.0.0.1:8080:8080"
+    environment:
+      # Agents authenticate with this bearer token (read from env by sbs-server).
+      SBS_AGENT_TOKEN: ${SBS_AGENT_TOKEN:?SBS_AGENT_TOKEN is required — copy .env.example to .env and set it}
+      # Operator/console auth token. Consumed by the console-auth build
+      # (docs/CONSOLE_API.md); harmless and forward-compatible if unset here.
+      SBS_CONSOLE_TOKEN: ${SBS_CONSOLE_TOKEN:-}
+      # Claude API key — only used when you switch the command below to -llm anthropic.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    command:
+      - -addr=0.0.0.0:8080
+      - -db=/data/sbs.db
+      - -llm=ollama
+      - -llm-url=http://ollama:11434
+      - -auto-triage=high
+    volumes:
+      - sbs-data:/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/overview"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  ollama:
+    image: ollama/ollama:0.40.2
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    # Not published to the host by default; the server reaches it over the compose
+    # network at http://ollama:11434. Uncomment to poke it from the host:
+    # ports:
+    #   - "127.0.0.1:11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Host agent — intentionally commented out. Running the agent in a container is
+  # inherently privileged: it needs the host PID namespace, host networking (for
+  # the netlink process connector) and read access to the host's /proc and
+  # sensitive paths. This is NOT an isolated sidecar; it is the host's EDR running
+  # in a namespace-sharing container. Prefer the native systemd install
+  # (scripts/install-agent.sh) on real hosts. See deploy/README.md for the full
+  # rationale and tradeoffs.
+  #
+  # sbs-agent:
+  #   build:
+  #     context: .
+  #     target: sbs-agent
+  #     args:
+  #       VERSION: ${SBS_VERSION:-docker}
+  #   image: sbs-agent:${SBS_VERSION:-local}
+  #   restart: unless-stopped
+  #   # Share the host's process and network namespaces so netlink exec events and
+  #   # /proc enrichment see real host processes.
+  #   pid: "host"
+  #   network_mode: "host"
+  #   cap_add:
+  #     - NET_ADMIN        # netlink process connector
+  #     - SYS_PTRACE       # read other users' /proc
+  #     - DAC_READ_SEARCH  # read sensitive files regardless of DAC
+  #     - KILL             # terminate offending processes (response actions)
+  #   security_opt:
+  #     - apparmor=unconfined
+  #   # The agent runs as root and reaches into the host; read-only host mounts
+  #   # limit the blast radius but do not make it "contained".
+  #   volumes:
+  #     - /proc:/host/proc:ro          # informational; the agent reads its own /proc with pid:host
+  #     - /etc/sbs/agent.yaml:/etc/sbs/agent.yaml:ro
+  #     - /var/lib/sbs:/var/lib/sbs    # anomaly state + quarantine (writable)
+  #     - /var/log/sbs:/var/log/sbs    # alert log (writable)
+  #   command: ["run", "-config", "/etc/sbs/agent.yaml"]
+
+volumes:
+  sbs-data:
+  ollama-models:

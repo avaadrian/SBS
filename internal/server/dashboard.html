@@ -88,6 +88,89 @@
   .state-fail { color: var(--fail); }
   .empty { padding: 24px; text-align: center; color: var(--muted); }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  /* --- form controls (login, rule composer, prompt) --- */
+  textarea, input.fld {
+    font: inherit; width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px;
+  }
+  textarea { resize: vertical; }
+  textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  input.fld:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .fld-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 8px 0 4px; }
+
+  button.signout { text-transform: none; letter-spacing: 0; }
+  button.act.danger { color: var(--fail); }
+  button.act.danger:hover { border-color: var(--fail); }
+  button.act.confirming { color: var(--accent-text); background: var(--fail); border-color: var(--fail); }
+  button.act.off { color: var(--muted); }
+
+  /* --- per-host response mode control --- */
+  .modecell { display: flex; flex-direction: column; gap: 3px; }
+  .segmented { display: inline-flex; flex-wrap: wrap; }
+  .segmented .seg { border-radius: 0; padding: 2px 8px; border-right-width: 0; }
+  .segmented .seg:first-child { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
+  .segmented .seg:last-child { border-top-right-radius: 7px; border-bottom-right-radius: 7px; border-right-width: 1px; }
+  .segmented .seg.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .pending { font-size: 11px; color: var(--accent); }
+  .badge-trip {
+    display: inline-block; align-self: flex-start; margin-top: 2px; padding: 1px 8px;
+    border-radius: 999px; font-size: 11px; font-weight: 650; text-transform: uppercase;
+    letter-spacing: .3px; color: var(--high); background: var(--high-bg);
+  }
+  .hint-error { color: var(--fail); font-size: 12px; margin-top: 4px; word-break: break-word; }
+
+  /* --- detection rules --- */
+  .sec-head { display: flex; align-items: center; gap: 12px; margin: 26px 0 10px; }
+  .sec-head h2 { margin: 0; }
+  .sec-head .ver { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: 0; }
+  .sec-head .grow { flex: 1; }
+  .sec-head button { text-transform: none; letter-spacing: 0; font-weight: 600; }
+  .pill.src-ai { color: var(--accent); background: var(--low-bg); }
+  .pill.src-manual { color: var(--info); background: var(--info-bg); }
+  .pill.tag { color: var(--info); background: var(--info-bg); text-transform: none; letter-spacing: 0; }
+  .composer { padding: 14px 16px; margin-bottom: 12px; }
+  .composer-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .composer-foot .grow { flex: 1; }
+  .gen-box { border: 1px dashed var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  .gen-row { display: flex; gap: 8px; align-items: flex-start; }
+  .gen-row .fld { flex: 1; }
+  .gen-row button { white-space: nowrap; }
+  .gen-result { margin-top: 8px; font-size: 12.5px; }
+  .gen-expl { color: var(--text); margin-bottom: 4px; }
+  .gen-meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+
+  /* --- overlays: login gate + modal --- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px;
+  }
+  .login-card { width: 100%; max-width: 360px; padding: 22px 20px; }
+  .login-h { margin: 0 0 4px; color: var(--text); text-transform: none; letter-spacing: 0; font-size: 16px; }
+  .login-submit { width: 100%; margin-top: 12px; padding: 8px; }
+  .modal-card { width: 100%; max-width: 560px; max-height: 85vh; display: flex; flex-direction: column; }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+  .modal-head h3 { margin: 0; font-size: 14px; }
+  .modal-scroll { padding: 14px 16px; overflow: auto; flex: 1 1 auto; }
+  .modal-scroll h4 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  .modal-scroll p { margin: 0 0 8px; }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); flex: 0 0 auto; }
+  .inc-title { font-size: 15px; font-weight: 650; margin: 6px 0 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .inc-list { margin: 4px 0 12px; padding-left: 20px; }
+  .inc-list li { margin: 3px 0; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .model-foot { margin-top: 12px; font-size: 11px; }
+
+  /* --- toasts (in-page, replaces alert) --- */
+  .toasts { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 60; width: min(92vw, 420px); pointer-events: none; }
+  .toast {
+    background: var(--panel); border: 1px solid var(--border); border-left-width: 4px;
+    border-radius: 8px; padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,.18);
+    opacity: 0; transform: translateY(8px); transition: opacity .25s, transform .25s; word-break: break-word;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast-ok { border-left-color: var(--ok); }
+  .toast-err { border-left-color: var(--fail); }
 </style>
 </head>
 <body>
@@ -97,6 +180,7 @@
   <span class="spacer"></span>
   <span class="meta" id="ai-state"></span>
   <span class="meta" id="updated">connecting…</span>
+  <button class="act signout" id="signout" data-act="logout" hidden>Sign out</button>
 </header>
 <main>
   <div class="legend">
@@ -128,7 +212,56 @@
     <thead><tr><th>Time</th><th>Sev</th><th>Rule</th><th>Alert</th><th>Host</th><th>Triage</th><th>Actions</th></tr></thead>
     <tbody id="alerts"><tr><td colspan="7" class="empty">No alerts yet.</td></tr></tbody>
   </table></div>
+
+  <div class="sec-head">
+    <h2>Detection rules</h2>
+    <span class="ver" id="rules-version" title="ruleset version"></span>
+    <span class="grow"></span>
+    <button class="act" id="rule-new-btn" data-act="rule-new">+ New rule</button>
+  </div>
+
+  <div class="panel composer" id="rule-composer" hidden>
+    <div class="gen-box" id="gen-box" hidden>
+      <label class="fld-label" for="gen-desc">Describe the behavior to detect — AI drafts the YAML</label>
+      <div class="gen-row">
+        <input class="fld" id="gen-desc" type="text" placeholder="e.g. a shell spawned by a web server that writes to /tmp">
+        <button class="act primary" id="gen-btn" data-act="rule-generate">Generate with AI</button>
+      </div>
+      <div class="gen-result" id="gen-result"></div>
+    </div>
+    <label class="fld-label" for="rule-yaml">Rule YAML (exactly one rule)</label>
+    <textarea class="fld mono" id="rule-yaml" rows="10" placeholder="- id: CUSTOM-001&#10;  title: ...&#10;  severity: high&#10;  event: process&#10;  match:&#10;    ..."></textarea>
+    <div class="hint-error" id="rule-save-error"></div>
+    <div class="composer-foot">
+      <span class="muted" id="rule-source-label"></span>
+      <span class="grow"></span>
+      <button class="act" data-act="rule-cancel">Cancel</button>
+      <button class="act primary" data-act="rule-save">Save rule</button>
+    </div>
+  </div>
+
+  <div class="panel"><table>
+    <thead><tr><th>Rule</th><th>Title</th><th>Sev</th><th>Source</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody id="rules"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+  </table></div>
 </main>
+
+<div class="overlay" id="login-gate" hidden>
+  <div class="panel login-card">
+    <h2 class="login-h">Operator sign-in</h2>
+    <p class="muted">This console requires a console token.</p>
+    <label class="fld-label" for="login-token">Console token</label>
+    <input class="fld" id="login-token" type="password" autocomplete="current-password" placeholder="paste console token">
+    <div class="hint-error" id="login-error"></div>
+    <button class="act primary login-submit" id="login-btn" data-act="login">Sign in</button>
+  </div>
+</div>
+
+<div class="overlay" id="modal" hidden>
+  <div class="panel modal-card" id="modal-card"></div>
+</div>
+
+<div class="toasts" id="toasts"></div>
 
 <script>
 const CONFIG = { aiEnabled: {{.AIEnabled}}, refreshMs: {{.RefreshMs}} };
@@ -137,6 +270,79 @@ const SEV_ORDER = ["critical", "high", "medium", "low", "info"];
 const el = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Live session/auth state. Seeded from the server-rendered config and then
+// refreshed from GET /api/session on boot.
+let SESSION = { authRequired: false, authenticated: true, ai: { enabled: CONFIG.aiEnabled, provider: "" } };
+let refreshTimer = null;
+// Source tag for the rule currently in the composer (flips to "ai" after a generate).
+let ruleSource = "manual";
+
+// Thrown by api() on a 401 so callers can bail quietly after the login gate
+// has already been shown.
+class AuthRequired extends Error {}
+
+// Every authenticated API call rides the session cookie (credentials) and, on a
+// 401, drops the operator back to the login gate.
+async function api(path, opts) {
+  const o = Object.assign({ credentials: "same-origin" }, opts || {});
+  const r = await fetch(path, o);
+  if (r.status === 401) { gateToLogin(); throw new AuthRequired("login required"); }
+  return r;
+}
+
+// In-page transient notice (window.alert may be a no-op in embedded contexts).
+function toast(msg, kind) {
+  const c = el("toasts");
+  if (!c) return;
+  const t = document.createElement("div");
+  t.className = "toast toast-" + (kind || "ok");
+  t.textContent = msg;
+  c.appendChild(t);
+  requestAnimationFrame(() => t.classList.add("show"));
+  setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 300); }, 3800);
+}
+
+// --- lightweight modal (incident summary + in-page confirm/prompt) ---
+let modalResolve = null;
+function openModalHTML(html) {
+  el("modal-card").innerHTML = html;
+  el("modal").hidden = false;
+}
+function closeModal(result) {
+  el("modal").hidden = true;
+  el("modal-card").innerHTML = "";
+  const f = modalResolve; modalResolve = null;
+  if (f) f(result);
+}
+// Returns a promise that resolves true on confirm, undefined otherwise.
+function confirmBox(title, message, confirmLabel) {
+  return new Promise(resolve => {
+    openModalHTML(
+      `<div class="modal-head"><h3>${esc(title)}</h3>` +
+      `<button class="act" data-act="modal-close" aria-label="Close">&#10005;</button></div>` +
+      `<div class="modal-scroll"><p>${esc(message)}</p></div>` +
+      `<div class="modal-foot">` +
+      `<button class="act" data-act="modal-cancel">Cancel</button>` +
+      `<button class="act primary" data-act="modal-confirm">${esc(confirmLabel || "Confirm")}</button></div>`);
+    modalResolve = resolve;
+  });
+}
+// Returns a promise that resolves to the entered string, or undefined if cancelled.
+function promptBox(title, label, defVal) {
+  return new Promise(resolve => {
+    openModalHTML(
+      `<div class="modal-head"><h3>${esc(title)}</h3>` +
+      `<button class="act" data-act="modal-close" aria-label="Close">&#10005;</button></div>` +
+      `<div class="modal-scroll"><label class="fld-label" for="prompt-input">${esc(label)}</label>` +
+      `<input class="fld" id="prompt-input" type="text" value="${esc(defVal || "")}"></div>` +
+      `<div class="modal-foot">` +
+      `<button class="act" data-act="modal-cancel">Cancel</button>` +
+      `<button class="act primary" data-act="prompt-ok">OK</button></div>`);
+    modalResolve = resolve;
+    setTimeout(() => { const i = el("prompt-input"); if (i) { i.focus(); i.select(); } }, 0);
+  });
+}
 
 function sevPill(s) {
   const k = (s || "info").toLowerCase();
@@ -172,6 +378,31 @@ function modePill(m) {
   return `<span class="mode mode-${esc(m)}" title="response mode">${esc(label)}</span>`;
 }
 
+// Segmented off|ask|auto|default control for a host's response mode. The active
+// segment reflects the operator override (desired_mode); the live pill shows what
+// the agent is actually running (response_mode). All values ride data-* attributes
+// through the delegated handler, never interpolated into inline JS.
+function modeControl(h) {
+  const cur = (h.response_mode || "off").toLowerCase();
+  const desired = h.desired_mode == null ? "" : String(h.desired_mode).toLowerCase();
+  const opts = [["off", "off"], ["ask", "ask"], ["auto", "auto"], ["", "default"]];
+  const seg = opts.map(([val, label]) => {
+    const active = (val === desired) ? " active" : "";
+    return `<button class="act seg${active}" data-act="mode" data-host="${esc(h.id)}" data-mode="${esc(val)}">${esc(label)}</button>`;
+  }).join("");
+  let extra = "";
+  if (desired && desired !== cur) {
+    extra += `<div class="pending" title="waiting for the agent to apply this override">&rarr; ${esc(desired)} pending</div>`;
+  }
+  if (h.auto_response_tripped) {
+    extra += `<div class="badge-trip" title="automatic responses hit the circuit breaker; the agent dropped to ask">auto tripped</div>`;
+  }
+  if (h.rules_error) {
+    extra += `<div class="hint-error mono" title="the agent failed to load distributed rules">${esc(h.rules_error)}</div>`;
+  }
+  return `<div class="modecell"><div>${modePill(h.response_mode)}</div><div class="segmented">${seg}</div>${extra}</div>`;
+}
+
 function renderHosts(hosts) {
   const tb = el("hosts");
   if (!hosts || !hosts.length) { tb.innerHTML = `<tr><td colspan="7" class="empty">No hosts yet.</td></tr>`; return; }
@@ -179,12 +410,13 @@ function renderHosts(hosts) {
     <tr>
       <td><strong>${esc(h.hostname || h.id)}</strong><div class="muted mono">${esc(h.id)}</div></td>
       <td>${esc(h.os || "—")}<div class="muted">${esc(h.kernel || "")} ${esc(h.arch || "")}</div></td>
-      <td>${modePill(h.response_mode)}</td>
+      <td>${modeControl(h)}</td>
       <td>${esc(h.process_source || "—")}</td>
       <td class="mono">${esc((h.ips || []).join(", ") || "—")}</td>
       <td title="${esc(h.last_seen)}">${ago(h.last_seen)}</td>
       <td><div class="actions">
         <button class="act" data-act="scan" data-host="${esc(h.id)}">Scan…</button>
+        ${CONFIG.aiEnabled ? `<button class="act" data-act="incident" data-host="${esc(h.id)}">Incident summary</button>` : ""}
       </div></td>
     </tr>`).join("");
 }
@@ -281,24 +513,47 @@ function renderAlerts(alerts) {
     </tr>`).join("");
 }
 
+// Re-render only the live data panels (counts, approvals, hosts, alerts). The
+// detection-rules section and any open composer/modal are left untouched.
 async function refresh() {
   try {
-    const r = await fetch("/api/overview");
+    const r = await api("/api/overview");
     if (!r.ok) throw new Error("HTTP " + r.status);
     const o = await r.json();
     renderCounts(o.counts);
     renderApprovals(o.approvals);
     renderHosts(o.hosts);
     renderAlerts(o.alerts);
+    if (o.ai) { SESSION.ai = o.ai; CONFIG.aiEnabled = !!o.ai.enabled; }
+    updateAIState();
+    setRulesVersion(o.rules_version);
     el("updated").textContent = "updated " + new Date().toLocaleTimeString();
-    el("ai-state").textContent = CONFIG.aiEnabled ? "AI analyst: on" : "AI analyst: off";
   } catch (e) {
+    if (e instanceof AuthRequired) return;
     el("updated").textContent = "error: " + e.message;
   }
 }
 
-// One delegated handler for every action button (data-act).
+function updateAIState() {
+  const ai = SESSION.ai || {};
+  el("ai-state").textContent = ai.enabled
+    ? ("AI analyst: " + (ai.provider ? ai.provider : "on"))
+    : "AI analyst: off";
+}
+
+function setRulesVersion(v) {
+  if (!v) return;
+  const s = String(v);
+  const span = el("rules-version");
+  span.textContent = "ruleset " + (s.length > 14 ? s.slice(0, 12) + "…" : s);
+  span.title = "ruleset version " + s;
+}
+
+// One delegated handler for every action button (data-act). Untrusted values
+// (hosts, ids, paths, rule ids) travel in HTML-escaped data-* attributes, never
+// interpolated into inline JS, so a crafted value cannot break out.
 document.addEventListener("click", (e) => {
+  if (e.target === el("modal")) { closeModal(); return; } // click on the dim backdrop
   const btn = e.target.closest("button.act");
   if (!btn) return;
   const d = btn.dataset;
@@ -309,59 +564,393 @@ document.addEventListener("click", (e) => {
     case "quarantine": cmd(d.host, "quarantine", { path: d.path, alert_id: d.id }); break;
     case "approve": decide(d.id, "approve", btn); break;
     case "decline": decide(d.id, "decline", btn); break;
+    case "login": doLogin(btn); break;
+    case "logout": doLogout(); break;
+    case "mode": setMode(d.host, d.mode, btn); break;
+    case "incident": showIncident(d.host, btn); break;
+    case "rule-new": openComposer(); break;
+    case "rule-cancel": closeComposer(); break;
+    case "rule-generate": generateRule(btn); break;
+    case "rule-save": saveRule(btn); break;
+    case "rule-toggle": toggleRule(d.id, d.enabled === "1", btn); break;
+    case "rule-delete": deleteRuleClick(btn); break;
+    case "modal-confirm": closeModal(true); break;
+    case "modal-cancel": closeModal(); break;
+    case "modal-close": closeModal(); break;
+    case "prompt-ok": { const i = el("prompt-input"); closeModal(i ? i.value : ""); break; }
+  }
+});
+
+// Keyboard: Enter submits the login token / prompt; Escape closes the modal.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !el("modal").hidden) { closeModal(); return; }
+  if (e.key === "Enter") {
+    if (!el("login-gate").hidden && document.activeElement === el("login-token")) {
+      e.preventDefault(); doLogin(el("login-btn")); return;
+    }
+    const pi = el("prompt-input");
+    if (pi && document.activeElement === pi) { e.preventDefault(); closeModal(pi.value); }
   }
 });
 
 // Approve or dismiss a pending proposal (ask mode).
 async function decide(id, action, btn) {
-  if (action === "approve" && !confirm("Approve and run the proposed response action(s)?")) return;
+  if (action === "approve" &&
+      !(await confirmBox("Approve response", "Approve and run the proposed response action(s)?", "Approve"))) return;
   btn.disabled = true;
   try {
-    const r = await fetch(`/api/alerts/${encodeURIComponent(id)}/${action}`, {
+    const r = await api(`/api/alerts/${encodeURIComponent(id)}/${action}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
     });
     if (!r.ok) throw new Error("HTTP " + r.status);
     await refresh();
   } catch (e) {
+    if (e instanceof AuthRequired) return;
     btn.disabled = false;
-    alert(action + " failed: " + e.message);
+    toast(action + " failed: " + e.message, "err");
   }
 }
 
 async function triage(id, btn) {
   btn.disabled = true; btn.textContent = "Triaging…";
   try {
-    const r = await fetch(`/api/alerts/${encodeURIComponent(id)}/triage`, { method: "POST" });
+    const r = await api(`/api/alerts/${encodeURIComponent(id)}/triage`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+    });
     if (!r.ok) throw new Error("HTTP " + r.status);
     await refresh();
   } catch (e) {
+    if (e instanceof AuthRequired) return;
     btn.disabled = false; btn.textContent = "Retry";
-    alert("Triage failed: " + e.message);
+    toast("Triage failed: " + e.message, "err");
   }
 }
 
 async function cmd(host, type, extra) {
   const body = Object.assign({ type }, extra || {});
-  if (!confirm(`Issue ${type} on ${host}?`)) return;
+  if (!(await confirmBox("Run command", `Issue ${type} on ${host}?`, "Run " + type))) return;
   try {
-    const r = await fetch(`/api/hosts/${encodeURIComponent(host)}/commands`, {
+    const r = await api(`/api/hosts/${encodeURIComponent(host)}/commands`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
     });
     if (!r.ok) throw new Error("HTTP " + r.status);
-    alert(`${type} queued for ${host}`);
+    toast(`${type} queued for ${host}`, "ok");
   } catch (e) {
-    alert("Command failed: " + e.message);
+    if (e instanceof AuthRequired) return;
+    toast("Command failed: " + e.message, "err");
   }
 }
 
-function scanHost(host) {
-  const path = prompt("Scan which path on " + host + "?", "/tmp");
+async function scanHost(host) {
+  const path = await promptBox("Scan host", "Scan which path on " + host + "?", "/tmp");
   if (!path) return;
   cmd(host, "scan", { path });
 }
 
-refresh();
-setInterval(refresh, CONFIG.refreshMs);
+// --- per-host response mode (POST /api/hosts/{id}/mode) ---
+async function setMode(host, mode, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api(`/api/hosts/${encodeURIComponent(host)}/mode`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: mode || "" }),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    toast("Mode set to " + (mode || "default") + " on " + host, "ok");
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthRequired) return;
+    if (btn) btn.disabled = false;
+    toast("Mode change failed: " + e.message, "err");
+  }
+}
+
+// --- AI incident summary (POST /api/hosts/{id}/incident) ---
+async function showIncident(host, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Summarizing…"; }
+  try {
+    const r = await api(`/api/hosts/${encodeURIComponent(host)}/incident`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+    });
+    if (r.status === 400) { toast("No alerts on " + host + " to summarize.", "err"); return; }
+    if (r.status === 404) { toast("Unknown host: " + host, "err"); return; }
+    if (r.status === 503) { toast("AI analyst is not configured.", "err"); return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    renderIncident(host, await r.json());
+  } catch (e) {
+    if (e instanceof AuthRequired) return;
+    toast("Incident summary failed: " + e.message, "err");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Incident summary"; }
+  }
+}
+
+function renderIncident(host, s) {
+  s = s || {};
+  const timeline = (s.timeline || []).map(t => `<li>${esc(t)}</li>`).join("");
+  const recs = (s.recommended_actions || []).map(t => `<li>${esc(t)}</li>`).join("");
+  const mitre = (s.mitre || []).map(t => `<span class="pill tag">${esc(t)}</span>`).join(" ");
+  openModalHTML(
+    `<div class="modal-head"><h3>Incident summary</h3>` +
+    `<button class="act" data-act="modal-close" aria-label="Close">&#10005;</button></div>` +
+    `<div class="modal-scroll">` +
+      `<div class="mono muted">${esc(host)}</div>` +
+      `<div class="inc-title">${esc(s.title || "—")} ${sevPill(s.severity)}</div>` +
+      (s.summary ? `<p>${esc(s.summary)}</p>` : "") +
+      (timeline ? `<h4>Timeline</h4><ol class="inc-list">${timeline}</ol>` : "") +
+      (recs ? `<h4>Recommended actions</h4><ul class="inc-list">${recs}</ul>` : "") +
+      (mitre ? `<h4>MITRE ATT&amp;CK</h4><div class="tags">${mitre}</div>` : "") +
+      (s.model ? `<div class="muted model-foot">model: ${esc(s.model)}</div>` : "") +
+    `</div>`);
+}
+
+// --- detection rules (GET/POST/DELETE /api/rules*) ---
+async function loadRules() {
+  try {
+    const r = await api("/api/rules");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    renderRules(data.rules || []);
+    if (data.version) setRulesVersion(data.version);
+  } catch (e) {
+    if (e instanceof AuthRequired) return;
+    el("rules").innerHTML = `<tr><td colspan="6" class="empty">Could not load rules: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+function renderRules(rules) {
+  const tb = el("rules");
+  if (!rules.length) { tb.innerHTML = `<tr><td colspan="6" class="empty">No custom rules.</td></tr>`; return; }
+  tb.innerHTML = rules.map(r => {
+    const on = !!r.enabled;
+    const src = (r.source || "manual").toLowerCase();
+    return `<tr>
+      <td class="mono">${esc(r.rule_id || r.id)}<div class="muted">${esc(r.event || "")}</div></td>
+      <td>${esc(r.title || "—")}<div class="muted" title="${esc(r.created_at || "")}">${ago(r.created_at)}</div></td>
+      <td>${sevPill(r.severity)}</td>
+      <td><span class="pill src-${esc(src)}">${esc(src)}</span></td>
+      <td><button class="act ${on ? "" : "off"}" data-act="rule-toggle" data-id="${esc(r.id)}" data-enabled="${on ? "1" : "0"}">${on ? "Enabled" : "Disabled"}</button></td>
+      <td><div class="actions"><button class="act danger" data-act="rule-delete" data-id="${esc(r.id)}">Delete</button></div></td>
+    </tr>`;
+  }).join("");
+}
+
+function updateSourceLabel() { el("rule-source-label").textContent = "source: " + ruleSource; }
+
+function openComposer() {
+  ruleSource = "manual";
+  el("rule-composer").hidden = false;
+  el("gen-box").hidden = !CONFIG.aiEnabled;
+  el("gen-result").innerHTML = "";
+  el("gen-desc").value = "";
+  el("rule-yaml").value = "";
+  el("rule-save-error").textContent = "";
+  updateSourceLabel();
+  el("rule-new-btn").disabled = true;
+  el("rule-yaml").focus();
+}
+
+function closeComposer() {
+  el("rule-composer").hidden = true;
+  el("rule-new-btn").disabled = false;
+}
+
+async function generateRule(btn) {
+  const desc = el("gen-desc").value.trim();
+  const out = el("gen-result");
+  if (!desc) { out.innerHTML = `<div class="hint-error">Enter a description first.</div>`; return; }
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = "Generating…";
+  out.innerHTML = `<div class="muted">Asking the AI analyst…</div>`;
+  try {
+    const r = await api("/api/rules/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: desc }),
+    });
+    if (r.status === 503) { out.innerHTML = `<div class="hint-error">AI analyst is not configured.</div>`; return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const g = await r.json();
+    if (g.yaml) { el("rule-yaml").value = g.yaml; ruleSource = "ai"; updateSourceLabel(); }
+    const verdict = g.valid
+      ? `<span class="state-ok">validated &#10003;</span>`
+      : `<span class="state-fail">did not validate${g.validation_error ? ": " + esc(g.validation_error) : ""}</span>`;
+    out.innerHTML =
+      (g.explanation ? `<div class="gen-expl">${esc(g.explanation)}</div>` : "") +
+      `<div class="gen-meta">${verdict}` +
+      (typeof g.attempts === "number" ? ` &middot; ${esc(g.attempts)} attempt(s)` : "") +
+      (g.model ? ` &middot; ${esc(g.model)}` : "") + `</div>` +
+      `<div class="muted">Review the YAML below, then Save rule.</div>`;
+  } catch (e) {
+    if (e instanceof AuthRequired) return;
+    out.innerHTML = `<div class="hint-error">Generate failed: ${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+
+async function saveRule(btn) {
+  const yaml = el("rule-yaml").value;
+  const errEl = el("rule-save-error");
+  errEl.textContent = "";
+  if (!yaml.trim()) { errEl.textContent = "Enter the rule YAML."; return; }
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    const r = await api("/api/rules", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ yaml, source: ruleSource }),
+    });
+    if (r.status === 400) {
+      let msg = "The YAML must be exactly one valid rule with a unique id.";
+      try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (_) {}
+      errEl.textContent = msg;
+      return;
+    }
+    if (r.status !== 201 && !r.ok) throw new Error("HTTP " + r.status);
+    toast("Rule saved.", "ok");
+    closeComposer();
+    await loadRules();
+    refresh();
+  } catch (e) {
+    if (e instanceof AuthRequired) return;
+    errEl.textContent = "Save failed: " + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+
+async function toggleRule(id, enabled, btn) {
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/rules/${encodeURIComponent(id)}/enabled`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: !enabled }),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    await loadRules();
+    refresh();
+  } catch (e) {
+    if (e instanceof AuthRequired) return;
+    btn.disabled = false;
+    toast("Toggle failed: " + e.message, "err");
+  }
+}
+
+// Two-click, in-page delete confirm (window.confirm may be a no-op here).
+function deleteRuleClick(btn) {
+  if (btn.dataset.confirm === "1") { performDeleteRule(btn.dataset.id, btn); return; }
+  btn.dataset.confirm = "1";
+  btn.textContent = "Confirm delete?";
+  btn.classList.add("confirming");
+  btn._revert = setTimeout(() => {
+    btn.dataset.confirm = "0";
+    btn.textContent = "Delete";
+    btn.classList.remove("confirming");
+  }, 3500);
+}
+
+async function performDeleteRule(id, btn) {
+  if (btn._revert) clearTimeout(btn._revert);
+  btn.disabled = true; btn.textContent = "Deleting…";
+  try {
+    const r = await api(`/api/rules/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (r.status !== 204 && !r.ok) throw new Error("HTTP " + r.status);
+    toast("Rule deleted.", "ok");
+    await loadRules();
+    refresh();
+  } catch (e) {
+    if (e instanceof AuthRequired) return;
+    btn.disabled = false; btn.textContent = "Delete";
+    btn.classList.remove("confirming"); btn.dataset.confirm = "0";
+    toast("Delete failed: " + e.message, "err");
+  }
+}
+
+// --- session / login gate ---
+function showLogin() {
+  el("login-gate").hidden = false;
+  el("signout").hidden = true;
+  const i = el("login-token");
+  if (i) setTimeout(() => i.focus(), 0);
+}
+function hideLogin() {
+  el("login-gate").hidden = true;
+  el("login-error").textContent = "";
+  el("login-token").value = "";
+}
+function gateToLogin() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  SESSION.authenticated = false;
+  showLogin();
+}
+
+async function doLogin(btn) {
+  const tokEl = el("login-token");
+  const errEl = el("login-error");
+  const token = tokEl.value;
+  errEl.textContent = "";
+  if (!token) { errEl.textContent = "Enter a token."; return; }
+  btn.disabled = true;
+  try {
+    // Not routed through api(): a 401 here is an expected "bad token", not a gate.
+    const r = await fetch("/api/login", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    if (r.status === 204) { hideLogin(); await boot(); return; }
+    if (r.status === 401) errEl.textContent = "Invalid token.";
+    else if (r.status === 429) errEl.textContent = "Too many attempts — wait a minute and try again.";
+    else errEl.textContent = "Sign-in failed (HTTP " + r.status + ").";
+  } catch (e) {
+    errEl.textContent = "Sign-in error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function doLogout() {
+  try {
+    await fetch("/api/logout", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (_) {}
+  gateToLogin();
+  boot();
+}
+
+function startData() {
+  refresh();
+  loadRules();
+  if (!refreshTimer) refreshTimer = setInterval(refresh, CONFIG.refreshMs);
+}
+
+// Entry point: learn the auth/AI state, then either gate to login or load data.
+async function boot() {
+  let s;
+  try {
+    const r = await fetch("/api/session", { credentials: "same-origin" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    s = await r.json();
+  } catch (e) {
+    el("updated").textContent = "error: " + e.message;
+    return;
+  }
+  SESSION = {
+    authRequired: !!s.auth_required,
+    authenticated: !!s.authenticated,
+    ai: s.ai || { enabled: CONFIG.aiEnabled, provider: "" },
+  };
+  CONFIG.aiEnabled = !!SESSION.ai.enabled;
+  updateAIState();
+  if (SESSION.authRequired && !SESSION.authenticated) { showLogin(); return; }
+  hideLogin();
+  el("signout").hidden = !SESSION.authRequired;
+  startData();
+}
+
+boot();
 </script>
 </body>
 </html>

@@ -150,7 +150,7 @@ os.execv("/bin/sh",["/bin/sh","-i"])`, port)
 		// dropped *script* slips past it; a dropped *ELF* does not. ---
 		{sc: Scenario{
 			Name: "dropper-script-home-exec", Technique: "T1204.002", Tactic: "execution",
-			Expect: []string{"SBS-PROC-005", "SBS-FILE-005"},
+			Expect: []string{"SBS-PROC-005", "SBS-FILE-005", "SBS-PROC-015"},
 			Run: func(s *Sandbox) error {
 				dir := s.Dir("home", "app")
 				if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -234,7 +234,7 @@ os.execv("/bin/sh",["/bin/sh","-i"])`, port)
 			// A transient unit lives under /run, not /etc/systemd/system, so the
 			// persistence watch never sees it (and it fails harmlessly without a bus).
 			Name: "systemd-run-transient", Technique: "T1053.006", Tactic: "persistence",
-			Expect: []string{"SBS-FILE-001"},
+			Expect: []string{"SBS-FILE-001", "SBS-PROC-016"},
 			Run: guard("systemd-run", func(*Sandbox) error {
 				return sh(`systemd-run --scope --quiet sleep 0.3 2>/dev/null; sleep 0.3`)
 			}),

@@ -6,6 +6,7 @@ require gopkg.in/yaml.v3 v3.0.1
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.79.1
+	github.com/cilium/ebpf v0.19.0
 	golang.org/x/sys v0.35.0
 	modernc.org/sqlite v1.38.2
 )

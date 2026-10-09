@@ -1,0 +1,67 @@
+[Unit]
+Description=SBS central collector and web console
+Documentation=https://github.com/avaadrian/sbs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Run as a dedicated, unprivileged system user. Create it once with:
+#   sudo useradd --system --home-dir /var/lib/sbs-server \
+#                --shell /usr/sbin/nologin sbs-server
+User=sbs-server
+Group=sbs-server
+
+# Tokens live here, not on the command line. Reads SBS_AGENT_TOKEN (required) and,
+# for the console-auth build, SBS_CONSOLE_TOKEN. See deploy/server.env.example.
+EnvironmentFile=/etc/sbs/server.env
+
+# Console bound to localhost — front it with a TLS reverse proxy for remote access,
+# or append -tls-cert/-tls-key once the server build supports them (docs/CONSOLE_API.md).
+# Add `-llm ollama -llm-url http://127.0.0.1:11434` (or `-llm anthropic`) to enable AI triage.
+ExecStart=/usr/local/bin/sbs-server -addr 127.0.0.1:8080 -db /var/lib/sbs-server/sbs.db -auto-triage high
+
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+
+# --- State: systemd creates/owns /var/lib/sbs-server (mode 0750) ---
+StateDirectory=sbs-server
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/sbs-server
+
+# --- Sandboxing / hardening ---
+# The server needs: TCP listen/connect (console + LLM/Anthropic), SQLite file I/O
+# under its state dir, and nothing else. If it fails to start, relax the options
+# below one at a time (MemoryDenyWriteExecute and SystemCallFilter are the usual
+# culprits with some toolchains).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/sbs-server
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged ~@resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -27,6 +27,7 @@ type Options struct {
 	Only      string        // run only scenarios whose name contains this
 	Keep      bool          // keep the sandbox directory
 	Heldout   bool          // use the held-out scenario set instead of the built-in one
+	Heldout2  bool          // use the held-out v2 scenario set instead of the built-in one
 	Log       io.Writer
 }
 
@@ -48,7 +49,7 @@ type Report struct {
 	Host            string    `json:"host"`
 	Kernel          string    `json:"kernel"`
 	Source          string    `json:"process_source"`
-	Suite           string    `json:"suite"` // "builtin" or "heldout"
+	Suite           string    `json:"suite"` // "builtin", "heldout", or "heldout2"
 	Scenarios       []Result  `json:"scenarios"`
 	Detected        int       `json:"detected"`
 	Total           int       `json:"total"`
@@ -106,10 +107,10 @@ anomaly:
 watch:
   - {path: %s, tag: persistence}
   - {path: %s, tag: drop}
-  - {path: %s, tag: ssh}
+  - {path: %s, tag: ssh, recursive: true}
   - {path: %s, tag: preload}
 `, orDefault(o.Source, "auto"), sb.Dir("alerts.jsonl"), sb.Dir("events.jsonl"),
-		sb.Dir("cron"), sb.Dir("drop"), sb.Dir("home/.ssh"), sb.Dir("etc/ld.so.preload"))
+		sb.Dir("cron"), sb.Dir("drop"), sb.Dir("home"), sb.Dir("etc/ld.so.preload"))
 	if err := os.WriteFile(sb.Dir("agent.yaml"), []byte(cfg), 0o644); err != nil {
 		return nil, err
 	}
@@ -179,6 +180,10 @@ watch:
 	if o.Heldout {
 		scenarioSet = HeldoutScenarios()
 		rep.Suite = "heldout"
+	}
+	if o.Heldout2 {
+		scenarioSet = HeldoutScenarios2()
+		rep.Suite = "heldout2"
 	}
 	var lat []float64
 	for _, sc := range scenarioSet {

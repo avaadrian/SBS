@@ -9,6 +9,8 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -48,6 +50,10 @@ type Config struct {
 	// Without it, only https or a loopback http endpoint is allowed, so the
 	// bearer token and telemetry are not sent in cleartext over a network.
 	Insecure bool
+	// CAFile is an optional PEM bundle of certificate authorities used to verify
+	// the server's TLS certificate. When set it replaces the system trust store,
+	// so a server with a private/self-signed CA can be trusted without Insecure.
+	CAFile string
 }
 
 // Client uploads alerts and heartbeats. It is safe for concurrent use.
@@ -89,13 +95,28 @@ func New(cfg Config) (*Client, error) {
 	if err := os.MkdirAll(cfg.SpoolDir, 0o700); err != nil {
 		return nil, err
 	}
+	hc := &http.Client{Timeout: cfg.HTTPTimeout}
+	if cfg.CAFile != "" {
+		pem, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("transport: read ca file %s: %w", cfg.CAFile, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("transport: no certificates found in ca file %s", cfg.CAFile)
+		}
+		// Clone the default transport so proxy and timeout settings are kept.
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+		hc.Transport = tr
+	}
 	bufN := cfg.BatchSize * 8
 	if bufN < 256 {
 		bufN = 256
 	}
 	return &Client{
 		cfg:  cfg,
-		http: &http.Client{Timeout: cfg.HTTPTimeout},
+		http: hc,
 		in:   make(chan *event.Alert, bufN),
 	}, nil
 }
@@ -257,6 +278,30 @@ func (c *Client) Heartbeat(ctx context.Context, hb api.Heartbeat) (*api.Heartbea
 		return nil, err
 	}
 	return &out, nil
+}
+
+// FetchRules GETs the server's current custom rule set. The agent calls it when
+// a heartbeat reports a rules version it does not have loaded.
+func (c *Client) FetchRules(ctx context.Context) (api.RuleSet, error) {
+	var out api.RuleSet
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+api.PathRules, nil)
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		io.Copy(io.Discard, resp.Body)
+		return out, fmt.Errorf("transport: rules status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return out, err
+	}
+	return out, nil
 }
 
 // CommandResult POSTs the outcome of a server-issued command.

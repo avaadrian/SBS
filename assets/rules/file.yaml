@@ -86,3 +86,21 @@
       - field: file.mode
         op: regex
         value: '^0[2-7][0-7]{3}$'
+
+- id: SBS-FILE-007
+  title: Dynamic linker preload file written (filename match)
+  description: >-
+    Any file whose path contains "ld.so.preload" is created or modified. This
+    broadens SBS-FILE-003 (which keys on the exact preload tag) so a sibling
+    filename such as ld.so.preload.bak, a staged copy, or a preload file in a
+    non-standard directory is caught whenever the watcher reports it.
+  severity: critical
+  mitre: [T1574.006]
+  event: file
+  match:
+    all:
+      - field: file.path
+        op: regex
+        value: 'ld\.so\.preload'
+      - field: file.op
+        value: [create, modify, rename, chmod]
