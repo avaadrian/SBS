@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/avaadrian/sbs/assets"
 	"github.com/avaadrian/sbs/internal/api"
 	"github.com/avaadrian/sbs/internal/event"
 	"github.com/avaadrian/sbs/internal/llm"
@@ -78,6 +79,9 @@ type Config struct {
 // memory or run up unbounded model cost.
 const maxConcurrentTriage = 4
 
+// maxRuleYAML bounds a single custom rule's YAML size.
+const maxRuleYAML = 256 << 10
+
 type Server struct {
 	st            *store.Store
 	cfg           Config
@@ -92,6 +96,8 @@ type Server struct {
 
 	failMu     sync.Mutex
 	loginFails map[string][]time.Time // client IP -> recent failure times
+
+	builtinIDs map[string]bool // ids of built-in rules, for collision checks
 }
 
 // New builds a Server. The returned Server does not start listening; use
@@ -109,6 +115,7 @@ func New(st *store.Store, cfg Config) *Server {
 		sem:           make(chan struct{}, maxConcurrentTriage),
 		sessions:      map[string]time.Time{},
 		loginFails:    map[string][]time.Time{},
+		builtinIDs:    builtinRuleIDs(),
 	}
 }
 
@@ -597,6 +604,12 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// A single rule is tiny; cap the size so a maliciously huge/deeply-nested
+	// rule cannot stress the parser on the server or the agents it is served to.
+	if len(req.YAML) > maxRuleYAML {
+		http.Error(w, "rule too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 	parsed, err := rules.Parse([]byte(req.YAML), "custom rule")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -607,6 +620,13 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule := parsed[0]
+	// Reject ids that collide with a built-in rule: on an agent, such a custom
+	// rule would be dropped (it cannot shadow the built-in), so storing it is
+	// pointless and confusing. Namespacing by a distinct id avoids the clash.
+	if s.builtinIDs[rule.ID] {
+		http.Error(w, "rule id "+rule.ID+" collides with a built-in rule; use a different id", http.StatusBadRequest)
+		return
+	}
 	source := req.Source
 	if source != "ai" {
 		source = "manual"
@@ -784,8 +804,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid := newSessionID()
+	now := time.Now()
 	s.sessMu.Lock()
-	s.sessions[sid] = time.Now().Add(sessionTTL)
+	// Opportunistically drop expired sessions so abandoned ones don't accumulate.
+	for id, exp := range s.sessions {
+		if now.After(exp) {
+			delete(s.sessions, id)
+		}
+	}
+	s.sessions[sid] = now.Add(sessionTTL)
 	s.sessMu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
@@ -1132,4 +1159,18 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// builtinRuleIDs returns the set of built-in rule ids, used to reject custom
+// rules that would collide with them.
+func builtinRuleIDs() map[string]bool {
+	ids := map[string]bool{}
+	rs, err := assets.Rules()
+	if err != nil {
+		return ids
+	}
+	for _, r := range rs {
+		ids[r.ID] = true
+	}
+	return ids
 }

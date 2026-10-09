@@ -34,12 +34,19 @@ import (
 // failures (4xx) are not retried: the request itself is bad.
 var errRetry = errors.New("transport: retriable failure")
 
+// maxServerBody caps a server response the agent will decode, so a malicious or
+// buggy server cannot OOM the agent with an unbounded body.
+const maxServerBody = 1 << 20 // 1 MiB: large enough for any heartbeat/ruleset, small enough that YAML parsing cannot overflow the stack
+
 // Config configures a Client. Zero values take documented defaults.
 type Config struct {
 	ServerURL string   // base URL of sbs-server, e.g. https://sbs.example.com
 	Token     string   // agent bearer token
-	Host      api.Host // this host's identity, sent with every batch
-	SpoolDir  string   // directory for spooled batches when offline
+	Host      api.Host // this host's identity, sent with every batch (fallback)
+	// HostProvider, when set, supplies a fresh host snapshot for each upload so
+	// the process source and current effective response mode are never stale.
+	HostProvider func() api.Host
+	SpoolDir     string // directory for spooled batches when offline
 
 	BatchSize         int           // alerts per batch (default 100)
 	FlushInterval     time.Duration // max time alerts wait before upload (default 5s)
@@ -212,7 +219,11 @@ func (c *Client) flush(ctx context.Context, batch []*event.Alert) {
 
 // marshalBatch encodes batch as a wire AlertBatch.
 func (c *Client) marshalBatch(batch []*event.Alert) ([]byte, error) {
-	return json.Marshal(api.AlertBatch{Host: c.cfg.Host, Alerts: batch})
+	host := c.cfg.Host
+	if c.cfg.HostProvider != nil {
+		host = c.cfg.HostProvider()
+	}
+	return json.Marshal(api.AlertBatch{Host: host, Alerts: batch})
 }
 
 // postAlerts gzip-compresses and POSTs a JSON AlertBatch body.
@@ -274,7 +285,7 @@ func (c *Client) Heartbeat(ctx context.Context, hb api.Heartbeat) (*api.Heartbea
 		return nil, fmt.Errorf("transport: heartbeat status %d", resp.StatusCode)
 	}
 	var out api.HeartbeatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxServerBody)).Decode(&out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -298,7 +309,7 @@ func (c *Client) FetchRules(ctx context.Context) (api.RuleSet, error) {
 		io.Copy(io.Discard, resp.Body)
 		return out, fmt.Errorf("transport: rules status %d", resp.StatusCode)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxServerBody)).Decode(&out); err != nil {
 		return out, err
 	}
 	return out, nil

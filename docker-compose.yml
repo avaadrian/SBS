@@ -20,7 +20,7 @@ services:
     image: sbs-server:${SBS_VERSION:-local}
     restart: unless-stopped
     ports:
-      # host:container — bound to localhost so the (currently unauthenticated)
+      # host:container — bound to localhost; set SBS_CONSOLE_TOKEN to require operator login
       # console is not exposed on the network.
       - "127.0.0.1:8080:8080"
     environment:
@@ -43,7 +43,7 @@ services:
       ollama:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/overview"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/session"]
       interval: 30s
       timeout: 5s
       retries: 3

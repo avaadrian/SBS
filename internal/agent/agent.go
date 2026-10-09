@@ -52,6 +52,11 @@ type ResponseConfig struct {
 	// mode. When exceeded, the circuit breaker downgrades the agent to ask.
 	// 0 (unset) uses the default of 10; a negative value disables the breaker.
 	MaxAutoActionsPerMinute int `yaml:"max_auto_actions_per_minute"`
+	// AllowServerOverride lets a server-sent mode override RAISE capability
+	// above the configured mode (e.g. configured ask -> server auto). Off by
+	// default: the server may always lower the mode (a safe kill switch) but
+	// cannot escalate a deliberately off/ask agent into an auto-killer.
+	AllowServerOverride bool `yaml:"allow_server_override"`
 }
 
 // mode returns the effective response mode.
@@ -177,6 +182,7 @@ type Agent struct {
 	started  time.Time
 	respMin  int        // severity rank threshold for response, -1 = disabled
 	resp     *respState // live effective mode + auto-response circuit breaker
+	props    *proposals // ask-mode proposals awaiting operator approval
 
 	// Built-in + file rules, kept so the engine can be rebuilt with custom
 	// rules fetched from the server. Flattened; validated unique in New.
@@ -243,7 +249,8 @@ func New(cfg Config, defaultRules []*rules.Rule, defaultSigs func(*scanner.Scann
 	if maxAuto == 0 { // unset => default; negative explicitly disables the breaker
 		maxAuto = 10
 	}
-	a.resp = newRespState(mode, maxAuto)
+	a.resp = newRespState(mode, maxAuto, cfg.Response.AllowServerOverride)
+	a.props = newProposals()
 	// Build the actioner and severity threshold whenever response could ever
 	// run: the configured mode is not off, or a server is present and may
 	// override the mode to ask/auto at runtime. With no server and mode off,
@@ -268,7 +275,8 @@ func New(cfg Config, defaultRules []*rules.Rule, defaultSigs func(*scanner.Scann
 		}
 		a.trans, err = transport.New(transport.Config{
 			ServerURL: cfg.Server.URL, Token: cfg.Server.Token, Host: a.host,
-			SpoolDir: spool, HeartbeatInterval: cfg.Server.HeartbeatInterval, Insecure: cfg.Server.Insecure,
+			HostProvider: a.hostSnapshot,
+			SpoolDir:     spool, HeartbeatInterval: cfg.Server.HeartbeatInterval, Insecure: cfg.Server.Insecure,
 			CAFile: cfg.Server.CAFile,
 		})
 		if err != nil {
@@ -451,6 +459,7 @@ func (a *Agent) respond(al *event.Alert) {
 	}
 	for _, act := range actions {
 		al.Proposed = append(al.Proposed, act.kind)
+		a.props.record(al.ID, act.kind, act.pid, act.path)
 	}
 }
 

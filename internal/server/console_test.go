@@ -429,3 +429,15 @@ func TestIncidentSummary(t *testing.T) {
 		t.Fatalf("incident summary: %+v", sum)
 	}
 }
+
+// TestCreateRuleRejectsBuiltinCollision checks a custom rule id colliding with a
+// built-in is rejected at create time.
+func TestCreateRuleRejectsBuiltinCollision(t *testing.T) {
+	ts := newTestServer(t, Config{})
+	ruleYAML := "- id: SBS-PROC-001\n  title: collide\n  event: process\n  match: {field: process.name, value: x}\n"
+	resp := post(t, ts.URL+"/api/rules", "", map[string]string{"yaml": ruleYAML, "source": "manual"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("collision create = %d, want 400", resp.StatusCode)
+	}
+}

@@ -45,6 +45,10 @@ response:
   mode: ask                       # off | ask (propose, wait for approval) | auto (act immediately)
   min_severity: critical          # info|low|medium|high|critical
   quarantine_dir: /var/lib/sbs/quarantine
+  # max_auto_actions_per_minute: 10   # auto-mode circuit breaker (0=default 10, <0=off)
+  # allow_server_override: false      # let a console mode change RAISE capability above
+                                      # the configured mode; default false = console can
+                                      # only lower it (a safe kill switch)
 
 # --- Behavioral anomaly layer ---
 anomaly:

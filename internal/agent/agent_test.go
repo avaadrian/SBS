@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"github.com/avaadrian/sbs/assets"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,7 +44,7 @@ func procAlert(pid int) *event.Alert {
 // --- respState unit tests ------------------------------------------------
 
 func TestRespStateOverrideAndRevert(t *testing.T) {
-	s := newRespState(ModeAuto, 10)
+	s := newRespState(ModeAuto, 10, false)
 	if got := s.mode(); got != ModeAuto {
 		t.Fatalf("initial mode = %q, want auto", got)
 	}
@@ -64,7 +65,7 @@ func TestRespStateOverrideAndRevert(t *testing.T) {
 }
 
 func TestRespStateBreakerTripAndReset(t *testing.T) {
-	s := newRespState(ModeAuto, 3)
+	s := newRespState(ModeAuto, 3, false)
 	now := time.Now()
 	for i := 0; i < 3; i++ {
 		if ok, _ := s.reserveAuto(1, now); !ok {
@@ -97,7 +98,7 @@ func TestRespStateBreakerTripAndReset(t *testing.T) {
 }
 
 func TestRespStateBreakerSlidingWindow(t *testing.T) {
-	s := newRespState(ModeAuto, 3)
+	s := newRespState(ModeAuto, 3, false)
 	t0 := time.Now()
 	for i := 0; i < 3; i++ {
 		s.reserveAuto(1, t0)
@@ -111,7 +112,7 @@ func TestRespStateBreakerSlidingWindow(t *testing.T) {
 }
 
 func TestRespStateBreakerDisabled(t *testing.T) {
-	s := newRespState(ModeAuto, -1) // negative disables the breaker
+	s := newRespState(ModeAuto, -1, false) // negative disables the breaker
 	now := time.Now()
 	for i := 0; i < 1000; i++ {
 		if ok, _ := s.reserveAuto(1, now); !ok {
@@ -319,11 +320,51 @@ func TestReloadRulesParseErrorKeepsEngine(t *testing.T) {
 	if a.rulesErr == "" {
 		t.Fatal("expected rulesErr after a bad rule set")
 	}
-	if a.rulesVersion == "bad" {
-		t.Fatal("version advanced despite parse error")
+	// The engine is kept (old rules keep firing), but the version IS adopted so
+	// the agent does not refetch and re-fail the same bad set every heartbeat.
+	if a.rulesVersion != "bad" {
+		t.Fatalf("version = %q, want the adopted bad version to stop refetch loop", a.rulesVersion)
 	}
 	if a.rules.Load() != before {
 		t.Fatal("engine was replaced despite parse error")
+	}
+}
+
+// TestReloadRulesSkipsCollidingCustomRule verifies a custom rule whose id
+// collides with a built-in is skipped (not fatal to the whole set) and the
+// version still advances.
+func TestReloadRulesSkipsCollidingCustomRule(t *testing.T) {
+	// One colliding id (SBS-PROC-001 is a built-in) and one valid custom rule.
+	yaml := "- id: SBS-PROC-001\n  title: collide\n  event: process\n  match: {field: process.name, value: x}\n" +
+		"- id: CUSTOM-900\n  title: ok\n  event: process\n  match: {field: process.name, value: zzz}\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(api.RuleSet{Version: "v2", YAML: yaml})
+	}))
+	defer srv.Close()
+
+	builtins, err := assets.Rules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(t, ModeAsk)
+	cfg.NoDefaults = false // load the built-ins so the collision is detected
+	cfg.Server.URL = srv.URL
+	cfg.Server.Token = "tok"
+	cfg.Server.SpoolDir = t.TempDir()
+	a, err := New(cfg, builtins, noSigs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.reloadRules(context.Background(), "v2")
+	if a.rulesVersion != "v2" {
+		t.Fatalf("version = %q, want v2", a.rulesVersion)
+	}
+	if a.rulesErr == "" {
+		t.Fatal("expected rulesErr noting the skipped colliding rule")
+	}
+	// The valid custom rule loaded; the built-in SBS-PROC-001 is intact.
+	if !a.rules.Load().Has("CUSTOM-900") || !a.rules.Load().Has("SBS-PROC-001") {
+		t.Fatal("expected both CUSTOM-900 and the built-in SBS-PROC-001 active")
 	}
 }
 
@@ -365,4 +406,46 @@ func TestModeAndEngineRaces(t *testing.T) {
 		close(stop)
 	}()
 	wg.Wait()
+}
+
+// TestRespStateOverrideCeiling verifies a server override may lower capability
+// but may only raise it above the configured mode when allowed.
+func TestRespStateOverrideCeiling(t *testing.T) {
+	// Configured ask, overrides NOT allowed to raise: auto is clamped to ask,
+	// off (lowering) is honored.
+	s := newRespState(ModeAsk, 10, false)
+	if _, to, _ := s.applyOverride(ModeAuto); to != ModeAsk {
+		t.Fatalf("auto override on ask ceiling = %q, want ask (clamped)", to)
+	}
+	if _, to, _ := s.applyOverride(ModeOff); to != ModeOff {
+		t.Fatalf("off override = %q, want off (lowering allowed)", to)
+	}
+	// Configured off is a hard floor without opt-in: nothing raises it.
+	s2 := newRespState(ModeOff, 10, false)
+	if _, to, _ := s2.applyOverride(ModeAuto); to != ModeOff {
+		t.Fatalf("auto override on off floor = %q, want off", to)
+	}
+	// With opt-in, raising is allowed.
+	s3 := newRespState(ModeAsk, 10, true)
+	if _, to, _ := s3.applyOverride(ModeAuto); to != ModeAuto {
+		t.Fatalf("auto override with allowOverride = %q, want auto", to)
+	}
+}
+
+// TestProposalsMatch verifies ask-mode commands only match a recorded proposal.
+func TestProposalsMatch(t *testing.T) {
+	p := newProposals()
+	p.record("a1", "kill", 4242, "")
+	if p.consume("a1", "kill", 1, "") { // wrong pid
+		t.Fatal("consumed with wrong pid")
+	}
+	if !p.consume("a1", "kill", 4242, "") { // correct
+		t.Fatal("did not consume a matching proposal")
+	}
+	if p.consume("a1", "kill", 4242, "") { // single-use
+		t.Fatal("consumed twice")
+	}
+	if p.consume("nope", "kill", 1, "") {
+		t.Fatal("consumed an unrecorded alert")
+	}
 }

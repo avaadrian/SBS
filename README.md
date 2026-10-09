@@ -171,7 +171,7 @@ it runs open and must stay on localhost.
 
 From the console you drive agents without touching them:
 
-- **Live response mode** — switch a host between `off`/`ask`/`auto` from the Hosts table; the choice reaches the agent on its next heartbeat and the agent reports back the mode it is actually running.
+- **Live response mode** — switch a host between `off`/`ask`/`auto` from the Hosts table; the choice reaches the agent on its next heartbeat and the agent reports back the mode it is actually running. A console override may always **lower** an agent's mode (a safe kill switch), but may only **raise** it above the mode set in the agent's own config when that config opts in (`response.allow_server_override: true`) — so a compromised console can't turn a deliberately `off`/`ask` agent into an auto-killer. In `ask` mode the agent executes an approved kill/quarantine only when it matches a proposal it actually made.
 - **Rule distribution** — write or AI-generate a detection rule, review the validated YAML, and deploy it. The server versions the enabled rule set; agents fetch and **hot-reload** it into the live engine without a restart, and report the version they loaded (and any load error). A bad rule keeps the previous engine.
 - **Circuit breaker** — in `auto` mode an agent caps automatic kills/quarantines per minute (`response.max_auto_actions_per_minute`); if it trips, it drops to `ask` and flags `auto_response_tripped` in the console, so a bad distributed rule can't make it kill processes en masse.
 

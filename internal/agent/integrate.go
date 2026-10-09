@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -172,24 +173,54 @@ func (a *Agent) reloadRules(ctx context.Context, serverVersion string) {
 	}
 	rs, err := a.trans.FetchRules(ctx)
 	if err != nil {
-		a.rulesErr = err.Error()
+		a.rulesErr = err.Error() // transient: do not adopt the version, retry next heartbeat
 		return
 	}
 	custom, err := rules.Parse([]byte(rs.YAML), "server rules "+rs.Version)
 	if err != nil {
+		// A persistently malformed set: adopt the version so we do not refetch
+		// and re-fail it every heartbeat; keep the previous engine.
 		a.rulesErr = err.Error()
+		a.rulesVersion = rs.Version
 		return
 	}
-	eng, err := rules.NewEngine(a.builtins, custom)
+	// Drop any custom rule whose id collides with a built-in or another custom
+	// rule, rather than letting one bad id fail the whole set fleet-wide.
+	kept, skipped := filterCustomRules(a.builtins, custom)
+	eng, err := rules.NewEngine(a.builtins, kept)
 	if err != nil {
 		a.rulesErr = err.Error()
+		a.rulesVersion = rs.Version
 		return
 	}
 	a.rules.Store(eng)
 	a.rulesVersion = rs.Version
-	a.rulesErr = ""
-	log.Printf("agent: loaded custom rule set version %q (%d custom rules, %d active total)",
-		rs.Version, len(custom), eng.Len())
+	if len(skipped) > 0 {
+		a.rulesErr = fmt.Sprintf("skipped %d custom rule(s) with a duplicate id: %s",
+			len(skipped), strings.Join(skipped, ", "))
+	} else {
+		a.rulesErr = ""
+	}
+	log.Printf("agent: loaded custom rule set version %q (%d custom rules, %d skipped, %d active total)",
+		rs.Version, len(kept), len(skipped), eng.Len())
+}
+
+// filterCustomRules drops custom rules whose id duplicates a built-in rule or an
+// earlier custom rule, returning the kept rules and the skipped ids.
+func filterCustomRules(builtins, custom []*rules.Rule) (kept []*rules.Rule, skipped []string) {
+	seen := make(map[string]bool, len(builtins)+len(custom))
+	for _, r := range builtins {
+		seen[r.ID] = true
+	}
+	for _, r := range custom {
+		if seen[r.ID] {
+			skipped = append(skipped, r.ID)
+			continue
+		}
+		seen[r.ID] = true
+		kept = append(kept, r)
+	}
+	return kept, skipped
 }
 
 // runCommand executes a server-issued command and reports the result. When
@@ -197,12 +228,16 @@ func (a *Agent) reloadRules(ctx context.Context, serverVersion string) {
 // silently dropping it, so the console sees why nothing happened.
 func (a *Agent) runCommand(ctx context.Context, cmd api.Command) {
 	res := api.CommandResult{HostID: a.host.ID, CommandID: cmd.ID, Time: time.Now().UTC()}
-	// kill/quarantine are accepted when remote commands are on, or in ask mode
-	// (where such a command is the operator's approval of the agent's own
-	// proposal). scan is only ever accepted with remote commands enabled.
-	approval := a.resp.mode() == ModeAsk && (cmd.Type == api.CmdKill || cmd.Type == api.CmdQuarantine)
+	// kill/quarantine are accepted when remote commands are explicitly enabled,
+	// or — in ask mode — only when the command approves a proposal THIS agent
+	// actually made (matched by alert id and target). A server-injected command
+	// that matches no live proposal is refused unless remote_commands is on, so
+	// a compromised control plane cannot drive arbitrary kills at an ask-mode
+	// agent that did not opt into remote commands.
+	approval := a.resp.mode() == ModeAsk && (cmd.Type == api.CmdKill || cmd.Type == api.CmdQuarantine) &&
+		a.props.consume(cmd.AlertID, cmd.Type, cmd.PID, cmd.Path)
 	if !a.cfg.RemoteCommands && !approval {
-		res.Error = "remote commands disabled on agent"
+		res.Error = "command refused: remote commands disabled and no matching proposal"
 		a.trans.CommandResult(ctx, res)
 		return
 	}
@@ -264,4 +299,13 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+// hostSnapshot returns the current host identity with the live process source
+// and effective response mode, so alert uploads never report stale values.
+func (a *Agent) hostSnapshot() api.Host {
+	h := a.host
+	h.ProcessSource = a.Source
+	h.ResponseMode = a.resp.mode()
+	return h
 }

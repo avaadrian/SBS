@@ -82,9 +82,9 @@ WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 8080
 
-# /api/overview needs no auth and always answers once the server is up.
+# /api/session is unauthenticated (login-state probe) and always answers once up.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -q -O /dev/null http://127.0.0.1:8080/api/overview || exit 1
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/api/session || exit 1
 
 # SBS_AGENT_TOKEN is read from the environment by the server (see cmd/sbs-server).
 # Override the CMD to add `-llm ollama -llm-url http://ollama:11434` etc.

@@ -107,10 +107,10 @@ anomaly:
 watch:
   - {path: %s, tag: persistence}
   - {path: %s, tag: drop}
-  - {path: %s, tag: ssh, recursive: true}
+  - {path: %s, tag: ssh}
   - {path: %s, tag: preload}
 `, orDefault(o.Source, "auto"), sb.Dir("alerts.jsonl"), sb.Dir("events.jsonl"),
-		sb.Dir("cron"), sb.Dir("drop"), sb.Dir("home"), sb.Dir("etc/ld.so.preload"))
+		sb.Dir("cron"), sb.Dir("drop"), sb.Dir("home/.ssh"), sb.Dir("etc/ld.so.preload"))
 	if err := os.WriteFile(sb.Dir("agent.yaml"), []byte(cfg), 0o644); err != nil {
 		return nil, err
 	}

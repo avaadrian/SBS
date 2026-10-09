@@ -80,7 +80,17 @@ var validOps = map[string]bool{
 
 var validSeverity = map[string]bool{"info": true, "low": true, "medium": true, "high": true, "critical": true}
 
-func (c *Cond) compile(path string) error {
+// maxCondDepth bounds the condition-tree nesting a rule may have, so a
+// maliciously deep rule (e.g. nested not/not/...) cannot blow the goroutine
+// stack when compiled or evaluated.
+const maxCondDepth = 64
+
+func (c *Cond) compile(path string) error { return c.compileAt(path, 0) }
+
+func (c *Cond) compileAt(path string, depth int) error {
+	if depth > maxCondDepth {
+		return fmt.Errorf("%s: condition nested deeper than %d", path, maxCondDepth)
+	}
 	set := 0
 	for _, b := range []bool{len(c.All) > 0, len(c.Any) > 0, c.Not != nil, c.Field != ""} {
 		if b {
@@ -91,17 +101,17 @@ func (c *Cond) compile(path string) error {
 		return fmt.Errorf("%s: condition must set exactly one of all/any/not/field", path)
 	}
 	for i := range c.All {
-		if err := c.All[i].compile(fmt.Sprintf("%s.all[%d]", path, i)); err != nil {
+		if err := c.All[i].compileAt(fmt.Sprintf("%s.all[%d]", path, i), depth+1); err != nil {
 			return err
 		}
 	}
 	for i := range c.Any {
-		if err := c.Any[i].compile(fmt.Sprintf("%s.any[%d]", path, i)); err != nil {
+		if err := c.Any[i].compileAt(fmt.Sprintf("%s.any[%d]", path, i), depth+1); err != nil {
 			return err
 		}
 	}
 	if c.Not != nil {
-		return c.Not.compile(path + ".not")
+		return c.Not.compileAt(path+".not", depth+1)
 	}
 	if c.Field == "" {
 		return nil
@@ -277,6 +287,16 @@ func isYAML(p string) bool {
 
 // Len returns the number of active rules.
 func (e *Engine) Len() int { return len(e.rules) }
+
+// Has reports whether a rule with the given id is active in the engine.
+func (e *Engine) Has(id string) bool {
+	for _, r := range e.rules {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
+}
 
 // Evaluate returns an alert for every rule the event matches.
 func (e *Engine) Evaluate(ev *event.Event) []*event.Alert {
