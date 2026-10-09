@@ -148,7 +148,7 @@ only when `remote_commands: true` (off by default).
 
 ## Server and console
 
-![SBS console](docs/dashboard.png)
+![SBS console](docs/dashboard-v03.png)
 
 `sbs-server` stores alerts and host state in SQLite (pure-Go, no cgo) and serves a
 dependency-free web dashboard plus a JSON API on localhost: severity counts, a
