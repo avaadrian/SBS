@@ -29,6 +29,7 @@ func Read(pid int) *event.Process {
 	p.Cwd, _ = os.Readlink(dir + "/cwd")
 	p.Comm = readComm(dir)
 	p.PPID, p.UID = status(dir)
+	p.PGID, p.SID = groups(pid)
 	var r0, r1 string
 	p.Stdin, r0 = fdType(dir, "0")
 	p.Stdout, r1 = fdType(dir, "1")
@@ -149,17 +150,34 @@ func decodeAddr(s string) string {
 	return net.JoinHostPort(ip.String(), strconv.FormatUint(pn, 10))
 }
 
-// startTime returns field 22 of /proc/<pid>/stat, used to tell PID reuse apart.
-func startTime(pid int) string {
+// groups returns the process group and session IDs (fields 5 and 6 of stat).
+func groups(pid int) (pgid, sid int) {
+	f := statFields(pid)
+	if len(f) < 4 {
+		return 0, 0
+	}
+	pgid, _ = strconv.Atoi(f[2])
+	sid, _ = strconv.Atoi(f[3])
+	return pgid, sid
+}
+
+// statFields returns the fields of /proc/<pid>/stat after the command name,
+// so index 0 is field 3 (state).
+func statFields(pid int) []string {
 	b, err := os.ReadFile(ProcRoot + "/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
-		return ""
+		return nil
 	}
 	i := bytes.LastIndexByte(b, ')')
 	if i < 0 {
-		return ""
+		return nil
 	}
-	f := strings.Fields(string(b[i+1:]))
+	return strings.Fields(string(b[i+1:]))
+}
+
+// startTime returns field 22 of /proc/<pid>/stat, used to tell PID reuse apart.
+func startTime(pid int) string {
+	f := statFields(pid)
 	if len(f) < 20 {
 		return ""
 	}

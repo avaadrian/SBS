@@ -4,6 +4,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -245,6 +247,7 @@ func (a *Agent) Handle(ev *event.Event) {
 		if a.suppress(al) {
 			continue
 		}
+		al.ID = newID()
 		a.Stats.Alerts.Add(1)
 		a.write(a.alerts, al)
 	}
@@ -300,6 +303,12 @@ func (a *Agent) suppress(al *event.Alert) bool {
 		}
 	}
 	return false
+}
+
+func newID() string {
+	var b [16]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 func (a *Agent) write(w io.Writer, v any) {

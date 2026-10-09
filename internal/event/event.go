@@ -27,6 +27,8 @@ type Event struct {
 type Process struct {
 	PID           int    `json:"pid"`
 	PPID          int    `json:"ppid"`
+	PGID          int    `json:"pgid"`
+	SID           int    `json:"sid"`
 	UID           int    `json:"uid"`
 	Exe           string `json:"exe"`
 	Comm          string `json:"comm"`
@@ -56,6 +58,8 @@ func (e *Event) Fields() map[string]string {
 	if p := e.Process; p != nil {
 		f["process.pid"] = strconv.Itoa(p.PID)
 		f["process.ppid"] = strconv.Itoa(p.PPID)
+		f["process.pgid"] = strconv.Itoa(p.PGID)
+		f["process.sid"] = strconv.Itoa(p.SID)
 		f["process.uid"] = strconv.Itoa(p.UID)
 		f["process.exe"] = p.Exe
 		f["process.name"] = p.Comm
@@ -82,6 +86,8 @@ func (e *Event) Fields() map[string]string {
 
 // Alert is a detection raised by a rule or by the signature scanner.
 type Alert struct {
+	ID        string    `json:"id"`             // random, assigned by the agent; used for idempotent upload
+	Host      string    `json:"host,omitempty"` // host ID, filled in by the server or transport
 	Time      time.Time `json:"time"`
 	RuleID    string    `json:"rule_id"`
 	Title     string    `json:"title"`
@@ -89,4 +95,16 @@ type Alert struct {
 	MITRE     []string  `json:"mitre,omitempty"`
 	Signature string    `json:"signature,omitempty"`
 	Event     *Event    `json:"event"`
+	// Actions are automatic response actions the agent took for this alert.
+	Actions []ActionResult `json:"actions,omitempty"`
+}
+
+// ActionResult records one response action (kill, quarantine, ...).
+type ActionResult struct {
+	Action string    `json:"action"` // kill | quarantine
+	Target string    `json:"target"` // pid or path
+	OK     bool      `json:"ok"`
+	Error  string    `json:"error,omitempty"`
+	Detail string    `json:"detail,omitempty"` // e.g. quarantine location
+	Time   time.Time `json:"time"`
 }

@@ -20,7 +20,7 @@ func TestDecodeAddr(t *testing.T) {
 
 func TestReadSelf(t *testing.T) {
 	p := Read(os.Getpid())
-	if p == nil || p.PID != os.Getpid() || p.PPID != os.Getppid() || p.Exe == "" {
+	if p == nil || p.PID != os.Getpid() || p.PPID != os.Getppid() || p.Exe == "" || p.PGID == 0 || p.SID == 0 {
 		t.Fatalf("bad self record: %+v", p)
 	}
 }
