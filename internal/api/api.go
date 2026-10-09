@@ -19,6 +19,9 @@ const (
 	PathAlerts        = "/api/v1/agent/alerts"
 	PathHeartbeat     = "/api/v1/agent/heartbeat"
 	PathCommandResult = "/api/v1/agent/commands/result"
+	// PathRules serves the server's custom (operator/AI-authored) rule set.
+	// GET, agent-token authenticated, returns RuleSet.
+	PathRules = "/api/v1/agent/rules"
 )
 
 // Host identifies an endpoint. ID is stable across restarts (derived from
@@ -61,6 +64,13 @@ type Heartbeat struct {
 	ResponseEnabled bool      `json:"response_enabled"` // automatic kill/quarantine on
 	RemoteCommands  bool      `json:"remote_commands"`  // agent accepts server commands
 	SpoolBacklog    int       `json:"spool_backlog"`    // alerts waiting to upload
+	// RulesVersion is the version of the custom rule set the agent has loaded
+	// ("" if none); RulesError is set when the last fetched set failed to load.
+	RulesVersion string `json:"rules_version,omitempty"`
+	RulesError   string `json:"rules_error,omitempty"`
+	// AutoResponseTripped is true while the auto-response circuit breaker has
+	// downgraded the agent from auto to ask (too many automatic actions).
+	AutoResponseTripped bool `json:"auto_response_tripped,omitempty"`
 }
 
 // Command types the agent understands.
@@ -85,6 +95,20 @@ type Command struct {
 type HeartbeatResponse struct {
 	ServerTime time.Time `json:"server_time"`
 	Commands   []Command `json:"commands,omitempty"`
+	// ResponseMode is the operator-chosen mode for this host (off|ask|auto);
+	// empty means the server has no override and the agent keeps its config.
+	ResponseMode string `json:"response_mode,omitempty"`
+	// RulesVersion is the server's current custom rule set version. When it
+	// differs from Heartbeat.RulesVersion the agent GETs PathRules.
+	RulesVersion string `json:"rules_version,omitempty"`
+}
+
+// RuleSet is the server's custom rule set: a YAML list of rules in the same
+// format as assets/rules, plus a version that changes whenever it changes.
+// An empty YAML with a non-empty Version means "no custom rules".
+type RuleSet struct {
+	Version string `json:"version"`
+	YAML    string `json:"yaml"`
 }
 
 // CommandResult reports the outcome of a Command.

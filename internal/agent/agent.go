@@ -121,24 +121,7 @@ func DefaultConfig() Config {
 		Dedup:         5 * time.Second,
 		Response:      ResponseConfig{Mode: ModeAsk, MinSeverity: "critical", QuarantineDir: "/var/lib/sbs/quarantine"},
 		Anomaly:       AnomalyConfig{Enabled: true, StateDir: "/var/lib/sbs"},
-		Watch: []fs.Watch{
-			{Path: "/etc/cron.d", Tag: "persistence"},
-			{Path: "/etc/crontab", Tag: "persistence"},
-			{Path: "/var/spool/cron", Tag: "persistence", Recursive: true},
-			{Path: "/etc/systemd/system", Tag: "persistence", Recursive: true},
-			{Path: "/etc/init.d", Tag: "persistence"},
-			{Path: "/etc/rc.local", Tag: "persistence"},
-			{Path: "/etc/profile.d", Tag: "persistence"},
-			{Path: "/etc/ld.so.preload", Tag: "preload"},
-			{Path: "/etc/passwd", Tag: "accounts"},
-			{Path: "/etc/shadow", Tag: "accounts"},
-			{Path: "/etc/sudoers", Tag: "accounts"},
-			{Path: "/etc/sudoers.d", Tag: "accounts"},
-			{Path: "/root/.ssh", Tag: "ssh"},
-			{Path: "/tmp", Tag: "drop"},
-			{Path: "/dev/shm", Tag: "drop"},
-			{Path: "/var/tmp", Tag: "drop"},
-		},
+		Watch:         defaultWatch(),
 	}
 }
 
