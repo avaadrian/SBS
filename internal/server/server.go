@@ -55,6 +55,11 @@ type Config struct {
 }
 
 // Server serves the agent and console HTTP APIs.
+// maxConcurrentTriage bounds background auto-triage goroutines (and therefore
+// concurrent LLM calls) so a flood of high-severity alerts cannot exhaust
+// memory or run up unbounded model cost.
+const maxConcurrentTriage = 4
+
 type Server struct {
 	st            *store.Store
 	cfg           Config
@@ -62,6 +67,7 @@ type Server struct {
 	triageTimeout time.Duration
 	minSevRank    int
 	wg            sync.WaitGroup
+	sem           chan struct{} // bounds concurrent auto-triage goroutines
 }
 
 // New builds a Server. The returned Server does not start listening; use
@@ -73,6 +79,7 @@ func New(st *store.Store, cfg Config) *Server {
 		tmpl:          template.Must(template.New("dashboard").Parse(dashboardHTML)),
 		triageTimeout: 45 * time.Second,
 		minSevRank:    severityRank(cfg.AutoTriageMinSeverity),
+		sem:           make(chan struct{}, maxConcurrentTriage),
 	}
 }
 
@@ -168,12 +175,20 @@ func (s *Server) handleCommandResult(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// autoTriage triages one alert in the background. It never blocks the caller
-// and recovers from panics in the Analyst.
+// autoTriage triages one alert in the background. It never blocks the caller,
+// bounds the number of concurrent triage goroutines (dropping auto-triage when
+// saturated — the console can still trigger it on demand), and recovers from
+// panics in the Analyst.
 func (s *Server) autoTriage(a *event.Alert, host string) {
+	select {
+	case s.sem <- struct{}{}: // acquire a slot, or skip if at capacity
+	default:
+		return
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer func() { <-s.sem }()
 		defer func() {
 			if p := recover(); p != nil {
 				log.Printf("server: auto-triage panic for %s: %v", a.ID, p)
@@ -289,6 +304,9 @@ func (s *Server) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTriage(w http.ResponseWriter, r *http.Request) {
+	if !guardConsolePOST(w, r, false) {
+		return
+	}
 	if s.cfg.Analyst == nil {
 		http.Error(w, "AI analyst not configured", http.StatusServiceUnavailable)
 		return
@@ -329,6 +347,9 @@ func (s *Server) handleTriage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEnqueueCommand(w http.ResponseWriter, r *http.Request) {
+	if !guardConsolePOST(w, r, true) {
+		return
+	}
 	hostID := r.PathValue("id")
 	var req struct {
 		Type    string `json:"type"`
@@ -415,6 +436,39 @@ func (s *Server) authed(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	log.Printf("server: %v", err)
 	http.Error(w, "internal error", http.StatusInternalServerError)
+}
+
+// crossSite reports whether a state-changing console request looks like a
+// cross-site browser request (CSRF). Browsers send Sec-Fetch-Site on fetch/form
+// submissions; anything but same-origin/same-site/none is rejected. Non-browser
+// clients (curl) send no such header and are allowed. This complements binding
+// the console to localhost, which alone does not stop a visited page from
+// POSTing to 127.0.0.1.
+func crossSite(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "same-site", "none":
+		return false
+	default:
+		return true
+	}
+}
+
+// guardConsolePOST rejects cross-site requests and, when a body is expected,
+// requires a JSON content type (blocking CSRF "simple requests" that use
+// text/plain). It returns false and writes the error if the request is refused.
+func guardConsolePOST(w http.ResponseWriter, r *http.Request, requireJSON bool) bool {
+	if crossSite(r) {
+		http.Error(w, "cross-site request refused", http.StatusForbidden)
+		return false
+	}
+	if requireJSON {
+		ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
+		if !strings.EqualFold(strings.TrimSpace(ct), "application/json") {
+			http.Error(w, "expected Content-Type: application/json", http.StatusUnsupportedMediaType)
+			return false
+		}
+	}
+	return true
 }
 
 func bearer(r *http.Request) string {

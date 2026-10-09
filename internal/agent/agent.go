@@ -41,6 +41,7 @@ type ResponseConfig struct {
 // ServerConfig points the agent at an sbs-server for alert upload and commands.
 type ServerConfig struct {
 	URL               string        `yaml:"url"`
+	Insecure          bool          `yaml:"insecure"`
 	Token             string        `yaml:"token"`
 	SpoolDir          string        `yaml:"spool_dir"`
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
@@ -219,7 +220,7 @@ func New(cfg Config, defaultRules []*rules.Rule, defaultSigs func(*scanner.Scann
 		}
 		a.trans, err = transport.New(transport.Config{
 			ServerURL: cfg.Server.URL, Token: cfg.Server.Token, Host: a.host,
-			SpoolDir: spool, HeartbeatInterval: cfg.Server.HeartbeatInterval,
+			SpoolDir: spool, HeartbeatInterval: cfg.Server.HeartbeatInterval, Insecure: cfg.Server.Insecure,
 		})
 		if err != nil {
 			return nil, err

@@ -117,8 +117,8 @@ const CONFIG = { aiEnabled: {{.AIEnabled}}, refreshMs: {{.RefreshMs}} };
 const SEV_ORDER = ["critical", "high", "medium", "low", "info"];
 
 const el = (id) => document.getElementById(id);
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c => (
-  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 function sevPill(s) {
   const k = (s || "info").toLowerCase();
@@ -159,7 +159,7 @@ function renderHosts(hosts) {
       <td class="mono">${esc((h.ips || []).join(", ") || "—")}</td>
       <td title="${esc(h.last_seen)}">${ago(h.last_seen)}</td>
       <td><div class="actions">
-        <button onclick="scanHost('${esc(h.id)}')">Scan…</button>
+        <button class="act" data-act="scan" data-host="${esc(h.id)}">Scan…</button>
       </div></td>
     </tr>`).join("");
 }
@@ -173,18 +173,22 @@ function triageCell(a) {
       (t.summary ? `<div class="summary">${esc(t.summary)}</div>` : "");
   }
   if (CONFIG.aiEnabled) {
-    return `<button data-triage="${esc(a.id)}" onclick="triage('${esc(a.id)}', this)">Triage</button>`;
+    return `<button class="act" data-act="triage" data-id="${esc(a.id)}">Triage</button>`;
   }
   return `<span class="muted">—</span>`;
 }
 
+// Action buttons carry their parameters in data-* attributes (HTML-escaped) and
+// are wired through one delegated click handler. Untrusted values such as file
+// paths are never interpolated into inline JS, so a crafted filename cannot
+// break out of an onclick attribute.
 function alertActions(a) {
   const btns = [];
   const ev = a.event || {};
   const p = ev.process;
   const f = ev.file;
-  if (p && p.pid) btns.push(`<button onclick="cmd('${esc(a.host)}','kill',{pid:${p.pid},alert_id:'${esc(a.id)}'})">Kill ${p.pid}</button>`);
-  if (f && f.path) btns.push(`<button onclick="cmd('${esc(a.host)}','quarantine',{path:${JSON.stringify(f.path)},alert_id:'${esc(a.id)}'})">Quarantine</button>`);
+  if (p && p.pid) btns.push(`<button class="act" data-act="kill" data-host="${esc(a.host)}" data-pid="${esc(p.pid)}" data-id="${esc(a.id)}">Kill ${esc(p.pid)}</button>`);
+  if (f && f.path) btns.push(`<button class="act" data-act="quarantine" data-host="${esc(a.host)}" data-path="${esc(f.path)}" data-id="${esc(a.id)}">Quarantine</button>`);
   return btns.length ? `<div class="actions">${btns.join("")}</div>` : `<span class="muted">—</span>`;
 }
 
@@ -228,6 +232,19 @@ async function refresh() {
     el("updated").textContent = "error: " + e.message;
   }
 }
+
+// One delegated handler for every action button (data-act).
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button.act");
+  if (!btn) return;
+  const d = btn.dataset;
+  switch (d.act) {
+    case "triage": triage(d.id, btn); break;
+    case "scan": scanHost(d.host); break;
+    case "kill": cmd(d.host, "kill", { pid: Number(d.pid), alert_id: d.id }); break;
+    case "quarantine": cmd(d.host, "quarantine", { path: d.path, alert_id: d.id }); break;
+  }
+});
 
 async function triage(id, btn) {
   btn.disabled = true; btn.textContent = "Triaging…";

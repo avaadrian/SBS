@@ -38,13 +38,17 @@ func run() error {
 	llmModel := flag.String("llm-model", "", "model id (default: provider's default)")
 	llmURL := flag.String("llm-url", "", "Ollama server URL (default http://localhost:11434) or Anthropic base URL")
 	autoTriage := flag.String("auto-triage", "high", "auto-triage alerts at or above this severity (info|low|medium|high|critical; empty to disable)")
+	insecure := flag.Bool("insecure-no-auth", false, "allow running with no agent token (open agent endpoints — testing only)")
 	flag.Parse()
 
 	if *token == "" {
 		*token = os.Getenv("SBS_AGENT_TOKEN")
 	}
+	if *token == "" && !*insecure {
+		return errors.New("no agent token set: pass -token or SBS_AGENT_TOKEN, or -insecure-no-auth to run without authentication")
+	}
 	if *token == "" {
-		log.Print("warning: no agent token set (-token or SBS_AGENT_TOKEN); agent authentication is effectively disabled")
+		log.Print("warning: -insecure-no-auth set; agent endpoints are unauthenticated")
 	}
 
 	analyst, err := llm.New(llm.Config{Provider: *llmMode, Model: *llmModel, BaseURL: *llmURL})

@@ -360,17 +360,28 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)`,
 	return err
 }
 
-// PendingCommands returns a host's pending commands (oldest first) and marks
-// them "sent" in the same transaction.
+// commandRetry is how long a "sent" command may go unacknowledged before it is
+// re-delivered. A heartbeat response can be lost in transit after the server
+// has already marked the command sent; without redelivery the containment
+// action would be silently stranded, so stale "sent" commands are re-armed.
+// It is a var only so tests can shorten it.
+var commandRetry = 2 * time.Minute
+
+// PendingCommands returns a host's deliverable commands (oldest first) — those
+// still pending plus any "sent" command unacknowledged for longer than
+// commandRetry — and marks them "sent" with a fresh timestamp in the same
+// transaction.
 func (s *Store) PendingCommands(hostID string) ([]api.Command, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	cutoff := time.Now().Add(-commandRetry).UnixNano()
 	rows, err := tx.Query(`
 SELECT id, type, pid, path, reason, alert_id, created
-FROM commands WHERE host_id = ? AND status = ? ORDER BY created ASC, rowid ASC`, hostID, StatusPending)
+FROM commands WHERE host_id = ? AND (status = ? OR (status = ? AND updated < ?))
+ORDER BY created ASC, rowid ASC`, hostID, StatusPending, StatusSent, cutoff)
 	if err != nil {
 		return nil, err
 	}

@@ -172,7 +172,12 @@ func (a *core) GenerateRule(ctx context.Context, description string) (*Generated
 			gr.Valid = false
 			gr.ValidationError = err.Error()
 			if attempt < maxRuleAttempts {
-				user = buildRuleRepairUser(gr.YAML, err.Error())
+				// The reply could not be parsed as the required JSON, so there is
+				// no candidate YAML to repair: re-ask from the description with
+				// the parse error as feedback rather than referencing stale YAML.
+				user = buildRuleUser(description) +
+					"\n\nYour previous reply could not be parsed (" + err.Error() +
+					"). Return ONLY the JSON object described above."
 				continue
 			}
 			return gr, nil

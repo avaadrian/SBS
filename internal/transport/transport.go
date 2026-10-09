@@ -14,7 +14,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -42,6 +44,10 @@ type Config struct {
 	HeartbeatInterval time.Duration // caller's heartbeat cadence (default 30s)
 	HTTPTimeout       time.Duration // per-request timeout (default 30s)
 	MaxSpoolFiles     int           // cap on spooled batches (default 2000)
+	// Insecure permits a plaintext http:// server URL to a non-loopback host.
+	// Without it, only https or a loopback http endpoint is allowed, so the
+	// bearer token and telemetry are not sent in cleartext over a network.
+	Insecure bool
 }
 
 // Client uploads alerts and heartbeats. It is safe for concurrent use.
@@ -62,6 +68,9 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("transport: SpoolDir is required")
 	}
 	cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
+	if err := checkURL(cfg.ServerURL, cfg.Insecure); err != nil {
+		return nil, err
+	}
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 100
 	}
@@ -91,6 +100,25 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
+// checkURL rejects a plaintext http:// server URL to a non-loopback host unless
+// insecure is set, so the bearer token is not sent in cleartext over a network.
+func checkURL(raw string, insecure bool) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("transport: invalid server url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("transport: server url must be http or https, got %q", u.Scheme)
+	}
+	if u.Scheme == "http" && !insecure {
+		host := u.Hostname()
+		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return fmt.Errorf("transport: refusing plaintext http to non-loopback host %q (use https or set insecure)", host)
+		}
+	}
+	return nil
+}
+
 // Enqueue buffers an alert for upload. It never blocks: if the buffer is full
 // the alert is spooled straight to disk so nothing is lost.
 func (c *Client) Enqueue(a *event.Alert) {
@@ -113,6 +141,17 @@ func (c *Client) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			// Drain whatever is still buffered so a burst just before shutdown
+			// is flushed (or spooled), never silently dropped.
+		drain:
+			for {
+				select {
+				case a := <-c.in:
+					batch = append(batch, a)
+				default:
+					break drain
+				}
+			}
 			if len(batch) > 0 {
 				fctx, cancel := context.WithTimeout(context.Background(), c.cfg.HTTPTimeout)
 				c.flush(fctx, batch)
@@ -181,7 +220,11 @@ func (c *Client) postAlerts(ctx context.Context, jsonBody []byte) error {
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return nil
-	case resp.StatusCode >= 500:
+	case resp.StatusCode >= 500,
+		resp.StatusCode == http.StatusRequestTimeout,  // 408
+		resp.StatusCode == http.StatusTooManyRequests, // 429
+		resp.StatusCode == http.StatusTooEarly:        // 425
+		// Transient: retry/keep spooled rather than dropping telemetry.
 		return fmt.Errorf("%w: status %d", errRetry, resp.StatusCode)
 	default:
 		return fmt.Errorf("transport: status %d", resp.StatusCode)

@@ -7,6 +7,7 @@ package response
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,8 +19,14 @@ import (
 	"github.com/avaadrian/sbs/internal/event"
 )
 
-// protectedRoots are filesystem trees the agent never quarantines from.
-var protectedRoots = []string{"/proc", "/sys", "/dev"}
+// protectedRoots are filesystem trees the agent never quarantines from:
+// pseudo-filesystems and the core system trees whose files must not be moved
+// or have their permissions stripped.
+var protectedRoots = []string{
+	"/proc", "/sys", "/dev", "/run",
+	"/boot", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
+	"/usr", "/etc",
+}
 
 // Actioner runs response actions. It is safe for concurrent use.
 type Actioner struct{}
@@ -81,15 +88,32 @@ func (a *Actioner) Quarantine(path, quarantineDir string) event.ActionResult {
 	}
 	sum := sha256.Sum256([]byte(path))
 	dest := filepath.Join(quarantineDir, hex.EncodeToString(sum[:])+"-"+filepath.Base(path))
-	// Rename is atomic within a filesystem; across one (EXDEV) fall back to copy.
+	// The source lives in an attacker-writable directory, so between the Lstat
+	// above and this move it may be swapped for a symlink (TOCTOU). os.Rename
+	// moves the symlink itself, and a path-based chmod would then follow it and
+	// hit an arbitrary file. So after any move we re-open the destination with
+	// O_NOFOLLOW and strip permissions through that fd, never through the path.
 	if err := os.Rename(path, dest); err != nil {
 		if cerr := copyRemove(path, dest); cerr != nil {
 			res.Error = cerr.Error()
 			return res
 		}
 	}
+	f, err := os.OpenFile(dest, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		// A symlink was moved into place, or the file vanished: discard it.
+		os.Remove(dest)
+		res.Error = "quarantine destination is not a regular file: " + err.Error()
+		return res
+	}
+	defer f.Close()
+	if fi, e := f.Stat(); e != nil || !fi.Mode().IsRegular() {
+		os.Remove(dest)
+		res.Error = "quarantine destination is not a regular file"
+		return res
+	}
 	// Strip all permissions so the quarantined file cannot be run or read.
-	if err := os.Chmod(dest, 0o000); err != nil {
+	if err := f.Chmod(0o000); err != nil {
 		res.Error = err.Error()
 		return res
 	}
@@ -99,13 +123,19 @@ func (a *Actioner) Quarantine(path, quarantineDir string) event.ActionResult {
 }
 
 // copyRemove copies src to dst then removes src, for renames across filesystems.
+// The source is opened O_NOFOLLOW so a symlink swapped in after the caller's
+// regular-file check cannot redirect the read to another file; the destination
+// is created O_EXCL so a pre-planted symlink there is not written through.
 func copyRemove(src, dst string) error {
-	in, err := os.Open(src)
+	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if fi, err := in.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return fmt.Errorf("source is not a regular file")
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}

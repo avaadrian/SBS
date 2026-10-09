@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +31,10 @@ const (
 	stateFile    = "anomaly-seen.json"
 )
 
+// maxSeen caps the remembered-binary baseline; oldest entries are evicted
+// (FIFO) to bound memory. It is a var only so tests can shrink it.
+var maxSeen = 100000
+
 // suspiciousRoots are directories a legitimate binary rarely runs from.
 var suspiciousRoots = []string{"/tmp/", "/var/tmp/", "/dev/shm/", "/home/"}
 
@@ -45,6 +48,7 @@ type Detector struct {
 
 	mu      sync.Mutex
 	seen    map[string]bool
+	order   []string // insertion order, for FIFO eviction when seen is full
 	total   int
 	dirty   int
 	buckets map[string]*bucket
@@ -85,13 +89,15 @@ func (d *Detector) Observe(ev *event.Event) *event.Alert {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.total++
-	// Update both detectors' state, then prefer the fan-out alert.
-	fo := d.fanout(ev, p)
+	// Update both detectors' state. Prefer the new-binary alert: it can fire
+	// only once per binary ever, whereas fan-out re-arms and will fire again on
+	// the next child, so returning fan-out here would lose the rarer signal.
 	nb := d.newbin(ev, p)
-	if fo != nil {
-		return fo
+	fo := d.fanout(ev, p)
+	if nb != nil {
+		return nb
 	}
-	return nb
+	return fo
 }
 
 // newbin flags the first execution of a previously-unseen binary, but only once
@@ -106,6 +112,12 @@ func (d *Detector) newbin(ev *event.Event, p *event.Process) *event.Alert {
 	first := !d.seen[path]
 	if first {
 		d.seen[path] = true
+		d.order = append(d.order, path)
+		for len(d.order) > maxSeen { // FIFO eviction keeps the baseline bounded
+			old := d.order[0]
+			d.order = d.order[1:]
+			delete(d.seen, old)
+		}
 		d.dirty++
 		if d.dirty >= saveEvery {
 			d.saveLocked()
@@ -204,8 +216,15 @@ func (d *Detector) load() {
 	if json.Unmarshal(data, &st) != nil {
 		return
 	}
-	for _, p := range st.Seen {
-		d.seen[p] = true
+	seen := st.Seen
+	if len(seen) > maxSeen { // keep the most recent entries
+		seen = seen[len(seen)-maxSeen:]
+	}
+	for _, p := range seen {
+		if !d.seen[p] {
+			d.seen[p] = true
+			d.order = append(d.order, p)
+		}
 	}
 	d.total = st.Total
 }
@@ -215,12 +234,8 @@ func (d *Detector) saveLocked() {
 	if d.stateDir == "" {
 		return
 	}
-	seen := make([]string, 0, len(d.seen))
-	for p := range d.seen {
-		seen = append(seen, p)
-	}
-	sort.Strings(seen) // stable file contents
-	data, err := json.Marshal(persisted{Seen: seen, Total: d.total})
+	// Persist in insertion order so FIFO eviction order survives a restart.
+	data, err := json.Marshal(persisted{Seen: d.order, Total: d.total})
 	if err != nil {
 		return
 	}
