@@ -75,6 +75,7 @@ func run(args []string) error {
 	if *source != "" {
 		cfg.ProcessSource = *source
 	}
+	cfg.AgentVersion = version
 	defRules, err := assets.Rules()
 	if err != nil {
 		return err

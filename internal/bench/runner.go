@@ -26,6 +26,7 @@ type Options struct {
 	LoadExecs int           // processes spawned in the exec-burst phase
 	Only      string        // run only scenarios whose name contains this
 	Keep      bool          // keep the sandbox directory
+	Heldout   bool          // use the held-out scenario set instead of the built-in one
 	Log       io.Writer
 }
 
@@ -47,6 +48,7 @@ type Report struct {
 	Host            string    `json:"host"`
 	Kernel          string    `json:"kernel"`
 	Source          string    `json:"process_source"`
+	Suite           string    `json:"suite"` // "builtin" or "heldout"
 	Scenarios       []Result  `json:"scenarios"`
 	Detected        int       `json:"detected"`
 	Total           int       `json:"total"`
@@ -91,10 +93,16 @@ func Run(o Options) (*Report, error) {
 			return nil, err
 		}
 	}
+	// The benchmark measures detection, so disable automatic response and the
+	// anomaly layer's persistent state (it would otherwise learn across runs).
 	cfg := fmt.Sprintf(`process_source: %q
 alerts: %s
 events: %s
 dedup: 2s
+response:
+  enabled: false
+anomaly:
+  enabled: false
 watch:
   - {path: %s, tag: persistence}
   - {path: %s, tag: drop}
@@ -166,8 +174,14 @@ watch:
 	clearDir(sb.Dir("drop"))
 
 	// Phase 2: attack scenarios.
+	scenarioSet := Scenarios()
+	rep.Suite = "builtin"
+	if o.Heldout {
+		scenarioSet = HeldoutScenarios()
+		rep.Suite = "heldout"
+	}
 	var lat []float64
-	for _, sc := range Scenarios() {
+	for _, sc := range scenarioSet {
 		if o.Only != "" && !strings.Contains(sc.Name, o.Only) {
 			continue
 		}

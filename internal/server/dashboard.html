@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SBS Console</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --border: #e2e5ea; --text: #1a1d21;
+    --muted: #6b7280; --accent: #2563eb; --accent-text: #ffffff;
+    --crit: #b91c1c; --high: #ea580c; --medium: #ca8a04; --low: #2563eb; --info: #64748b;
+    --crit-bg: #fdecec; --high-bg: #fdefe3; --medium-bg: #fbf4dc; --low-bg: #e8f0fe; --info-bg: #eef1f5;
+    --ok: #15803d; --fail: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --panel: #171b22; --border: #272c36; --text: #e6e9ef;
+      --muted: #9aa4b2; --accent: #3b82f6; --accent-text: #ffffff;
+      --crit: #f87171; --high: #fb923c; --medium: #fbbf24; --low: #60a5fa; --info: #94a3b8;
+      --crit-bg: #2a1416; --high-bg: #291a10; --medium-bg: #26210f; --low-bg: #121c2e; --info-bg: #1b1f27;
+      --ok: #4ade80; --fail: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(21,128,61,.15); }
+  header .spacer { flex: 1; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; color: var(--muted); font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 22px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card .n { font-size: 26px; font-weight: 700; line-height: 1; }
+  .card .k { text-transform: uppercase; font-size: 11px; letter-spacing: .6px; color: var(--muted); margin-top: 6px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 26px 0 10px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+    font-weight: 650; text-transform: uppercase; letter-spacing: .3px;
+  }
+  .sev-critical { color: var(--crit); background: var(--crit-bg); }
+  .sev-high { color: var(--high); background: var(--high-bg); }
+  .sev-medium { color: var(--medium); background: var(--medium-bg); }
+  .sev-low { color: var(--low); background: var(--low-bg); }
+  .sev-info { color: var(--info); background: var(--info-bg); }
+  .verdict-malicious { color: var(--crit); font-weight: 650; }
+  .verdict-suspicious { color: var(--high); font-weight: 650; }
+  .verdict-benign { color: var(--ok); font-weight: 650; }
+  .verdict-unknown { color: var(--muted); }
+  .muted { color: var(--muted); }
+  button {
+    font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); border-radius: 7px; padding: 3px 9px;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .summary { color: var(--muted); font-size: 12.5px; margin-top: 4px; max-width: 520px; }
+  .empty { padding: 24px; text-align: center; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot"></span>
+  <h1>SBS Console</h1>
+  <span class="spacer"></span>
+  <span class="meta" id="ai-state"></span>
+  <span class="meta" id="updated">connecting…</span>
+</header>
+<main>
+  <div class="legend">
+    <span><i class="sev-critical" style="background:var(--crit)"></i>critical</span>
+    <span><i style="background:var(--high)"></i>high</span>
+    <span><i style="background:var(--medium)"></i>medium</span>
+    <span><i style="background:var(--low)"></i>low</span>
+    <span><i style="background:var(--info)"></i>info</span>
+  </div>
+
+  <div class="counts" id="counts"></div>
+
+  <h2>Hosts</h2>
+  <div class="panel"><table>
+    <thead><tr><th>Host</th><th>OS</th><th>Source</th><th>IPs</th><th>Last seen</th><th>Actions</th></tr></thead>
+    <tbody id="hosts"><tr><td colspan="6" class="empty">No hosts yet.</td></tr></tbody>
+  </table></div>
+
+  <h2>Recent alerts</h2>
+  <div class="panel"><table>
+    <thead><tr><th>Time</th><th>Sev</th><th>Rule</th><th>Alert</th><th>Host</th><th>Triage</th><th>Actions</th></tr></thead>
+    <tbody id="alerts"><tr><td colspan="7" class="empty">No alerts yet.</td></tr></tbody>
+  </table></div>
+</main>
+
+<script>
+const CONFIG = { aiEnabled: {{.AIEnabled}}, refreshMs: {{.RefreshMs}} };
+const SEV_ORDER = ["critical", "high", "medium", "low", "info"];
+
+const el = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function sevPill(s) {
+  const k = (s || "info").toLowerCase();
+  return `<span class="pill sev-${esc(k)}">${esc(k)}</span>`;
+}
+
+function ago(iso) {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "—";
+  const d = Math.max(0, (Date.now() - t) / 1000);
+  if (d < 60) return Math.floor(d) + "s ago";
+  if (d < 3600) return Math.floor(d / 60) + "m ago";
+  if (d < 86400) return Math.floor(d / 3600) + "h ago";
+  return Math.floor(d / 86400) + "d ago";
+}
+
+function renderCounts(counts) {
+  counts = counts || {};
+  let total = 0;
+  for (const k in counts) total += counts[k];
+  const cells = [`<div class="card"><div class="n">${total}</div><div class="k">total</div></div>`];
+  for (const s of SEV_ORDER) {
+    const n = counts[s] || 0;
+    cells.push(`<div class="card"><div class="n sev-${s}" style="background:none;color:var(--${s === "critical" ? "crit" : s})">${n}</div><div class="k">${s}</div></div>`);
+  }
+  el("counts").innerHTML = cells.join("");
+}
+
+function renderHosts(hosts) {
+  const tb = el("hosts");
+  if (!hosts || !hosts.length) { tb.innerHTML = `<tr><td colspan="6" class="empty">No hosts yet.</td></tr>`; return; }
+  tb.innerHTML = hosts.map(h => `
+    <tr>
+      <td><strong>${esc(h.hostname || h.id)}</strong><div class="muted mono">${esc(h.id)}</div></td>
+      <td>${esc(h.os || "—")}<div class="muted">${esc(h.kernel || "")} ${esc(h.arch || "")}</div></td>
+      <td>${esc(h.process_source || "—")}</td>
+      <td class="mono">${esc((h.ips || []).join(", ") || "—")}</td>
+      <td title="${esc(h.last_seen)}">${ago(h.last_seen)}</td>
+      <td><div class="actions">
+        <button onclick="scanHost('${esc(h.id)}')">Scan…</button>
+      </div></td>
+    </tr>`).join("");
+}
+
+function triageCell(a) {
+  if (a.triage) {
+    const t = a.triage;
+    const v = (t.verdict || "unknown").toLowerCase();
+    const conf = typeof t.confidence === "number" ? ` ${Math.round(t.confidence * 100)}%` : "";
+    return `<span class="verdict-${esc(v)}">${esc(v)}${esc(conf)}</span>` +
+      (t.summary ? `<div class="summary">${esc(t.summary)}</div>` : "");
+  }
+  if (CONFIG.aiEnabled) {
+    return `<button data-triage="${esc(a.id)}" onclick="triage('${esc(a.id)}', this)">Triage</button>`;
+  }
+  return `<span class="muted">—</span>`;
+}
+
+function alertActions(a) {
+  const btns = [];
+  const ev = a.event || {};
+  const p = ev.process;
+  const f = ev.file;
+  if (p && p.pid) btns.push(`<button onclick="cmd('${esc(a.host)}','kill',{pid:${p.pid},alert_id:'${esc(a.id)}'})">Kill ${p.pid}</button>`);
+  if (f && f.path) btns.push(`<button onclick="cmd('${esc(a.host)}','quarantine',{path:${JSON.stringify(f.path)},alert_id:'${esc(a.id)}'})">Quarantine</button>`);
+  return btns.length ? `<div class="actions">${btns.join("")}</div>` : `<span class="muted">—</span>`;
+}
+
+function alertTitle(a) {
+  const ev = a.event || {};
+  const p = ev.process;
+  const f = ev.file;
+  let detail = "";
+  if (p && p.cmdline) detail = p.cmdline;
+  else if (p && p.exe) detail = p.exe;
+  else if (f && f.path) detail = (f.op || "") + " " + f.path;
+  return `<div>${esc(a.title || a.rule_id)}</div>` + (detail ? `<div class="muted mono">${esc(detail)}</div>` : "");
+}
+
+function renderAlerts(alerts) {
+  const tb = el("alerts");
+  if (!alerts || !alerts.length) { tb.innerHTML = `<tr><td colspan="7" class="empty">No alerts yet.</td></tr>`; return; }
+  tb.innerHTML = alerts.map(a => `
+    <tr>
+      <td title="${esc(a.time)}">${ago(a.time)}</td>
+      <td>${sevPill(a.severity)}</td>
+      <td class="mono">${esc(a.rule_id || "—")}</td>
+      <td>${alertTitle(a)}</td>
+      <td class="mono">${esc(a.host || "—")}</td>
+      <td>${triageCell(a)}</td>
+      <td>${alertActions(a)}</td>
+    </tr>`).join("");
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/overview");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const o = await r.json();
+    renderCounts(o.counts);
+    renderHosts(o.hosts);
+    renderAlerts(o.alerts);
+    el("updated").textContent = "updated " + new Date().toLocaleTimeString();
+    el("ai-state").textContent = CONFIG.aiEnabled ? "AI analyst: on" : "AI analyst: off";
+  } catch (e) {
+    el("updated").textContent = "error: " + e.message;
+  }
+}
+
+async function triage(id, btn) {
+  btn.disabled = true; btn.textContent = "Triaging…";
+  try {
+    const r = await fetch(`/api/alerts/${encodeURIComponent(id)}/triage`, { method: "POST" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    await refresh();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Retry";
+    alert("Triage failed: " + e.message);
+  }
+}
+
+async function cmd(host, type, extra) {
+  const body = Object.assign({ type }, extra || {});
+  if (!confirm(`Issue ${type} on ${host}?`)) return;
+  try {
+    const r = await fetch(`/api/hosts/${encodeURIComponent(host)}/commands`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    alert(`${type} queued for ${host}`);
+  } catch (e) {
+    alert("Command failed: " + e.message);
+  }
+}
+
+function scanHost(host) {
+  const path = prompt("Scan which path on " + host + "?", "/tmp");
+  if (!path) return;
+  cmd(host, "scan", { path });
+}
+
+refresh();
+setInterval(refresh, CONFIG.refreshMs);
+</script>
+</body>
+</html>

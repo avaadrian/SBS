@@ -30,6 +30,7 @@ func main() {
 	minRate := flag.Float64("min-detection", 0, "exit 1 if the detection rate is below this (0..1)")
 	maxFP := flag.Int("max-fp", -1, "exit 1 if there are more false positives than this (-1 = no limit)")
 	keep := flag.Bool("keep", false, "keep the sandbox directory for inspection")
+	heldout := flag.Bool("heldout", false, "run the independent held-out scenario set instead of the built-in one")
 	flag.Parse()
 
 	path, err := findAgent(*agent)
@@ -37,7 +38,7 @@ func main() {
 		log.Fatal(err)
 	}
 	rep, err := bench.Run(bench.Options{
-		AgentPath: path, Source: *source, Timeout: *timeout, LoadExecs: *load,
+		AgentPath: path, Source: *source, Timeout: *timeout, LoadExecs: *load, Heldout: *heldout,
 		Only: *only, Keep: *keep, Log: os.Stdout,
 	})
 	if err != nil {

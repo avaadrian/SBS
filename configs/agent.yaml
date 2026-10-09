@@ -37,3 +37,27 @@ watch:
   - {path: /tmp, tag: drop}
   - {path: /dev/shm, tag: drop}
   - {path: /var/tmp, tag: drop}
+
+# --- Automatic response (local) ---
+# Kill the process and quarantine malicious files at or above min_severity.
+# Enabled by default for critical detections only.
+response:
+  enabled: true
+  min_severity: critical          # info|low|medium|high|critical
+  quarantine_dir: /var/lib/sbs/quarantine
+
+# --- Behavioral anomaly layer ---
+anomaly:
+  enabled: true
+  state_dir: /var/lib/sbs         # remembers seen binaries across restarts
+
+# --- Central server (optional) ---
+# When url is set, the agent uploads alerts (batched, with offline spooling)
+# and sends heartbeats. remote_commands lets the console drive kill/quarantine/
+# scan on this host; it is off by default.
+# server:
+#   url: https://sbs.example.com
+#   token: CHANGE_ME             # must match sbs-server -token
+#   spool_dir: /var/lib/sbs/spool
+#   heartbeat_interval: 30s
+# remote_commands: false

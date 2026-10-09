@@ -6,9 +6,17 @@ import (
 	"strings"
 )
 
+// suiteName labels the scenario set, defaulting older reports to "builtin".
+func suiteName(s string) string {
+	if s == "" {
+		return "builtin"
+	}
+	return s
+}
+
 // WriteText prints a human-readable summary.
 func (r *Report) WriteText(w io.Writer) {
-	fmt.Fprintf(w, "\nSBS benchmark  %s  kernel %s  source %s\n", r.Time.Format("2006-01-02 15:04:05Z"), r.Kernel, r.Source)
+	fmt.Fprintf(w, "\nSBS benchmark [%s]  %s  kernel %s  source %s\n", suiteName(r.Suite), r.Time.Format("2006-01-02 15:04:05Z"), r.Kernel, r.Source)
 	fmt.Fprintf(w, "  detection rate   %d/%d (%.0f%%)\n", r.Detected, r.Total, 100*r.DetectionRate)
 	fmt.Fprintf(w, "  median latency   %.0f ms\n", r.MedianLatencyMS)
 	fmt.Fprintf(w, "  false positives  %d over %d benign commands\n", len(r.FalsePositives), r.BenignCommands)
@@ -26,7 +34,7 @@ func (r *Report) WriteText(w io.Writer) {
 // WriteMarkdown writes the report as a Markdown table.
 func (r *Report) WriteMarkdown(w io.Writer) {
 	fmt.Fprintf(w, "# SBS benchmark report\n\n")
-	fmt.Fprintf(w, "%s · kernel `%s` · process source `%s`\n\n", r.Time.Format("2006-01-02 15:04 UTC"), r.Kernel, r.Source)
+	fmt.Fprintf(w, "%s · suite `%s` · kernel `%s` · process source `%s`\n\n", r.Time.Format("2006-01-02 15:04 UTC"), suiteName(r.Suite), r.Kernel, r.Source)
 	fmt.Fprintf(w, "| Metric | Value |\n|---|---|\n")
 	fmt.Fprintf(w, "| Detection rate | %d/%d (%.0f%%) |\n", r.Detected, r.Total, 100*r.DetectionRate)
 	fmt.Fprintf(w, "| Median time to detect | %.0f ms |\n", r.MedianLatencyMS)
