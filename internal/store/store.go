@@ -28,6 +28,13 @@ const (
 	StatusFailed  = "failed"
 )
 
+// Approval statuses for an alert's proposed response actions (ask mode).
+const (
+	ApprovalPending   = "pending"
+	ApprovalApproved  = "approved"
+	ApprovalDismissed = "dismissed"
+)
+
 // Store is a handle to the server database. It is safe for concurrent use.
 type Store struct {
 	db *sql.DB
@@ -45,6 +52,7 @@ type Host struct {
 type Alert struct {
 	event.Alert
 	Triage    json.RawMessage `json:"triage,omitempty"`
+	Approval  string          `json:"approval,omitempty"` // "", pending, approved, dismissed
 	CreatedAt time.Time       `json:"created_at"`
 }
 
@@ -66,6 +74,7 @@ CREATE TABLE IF NOT EXISTS hosts (
 	arch           TEXT NOT NULL DEFAULT '',
 	agent_version  TEXT NOT NULL DEFAULT '',
 	process_source TEXT NOT NULL DEFAULT '',
+	response_mode  TEXT NOT NULL DEFAULT '',
 	first_seen     INTEGER NOT NULL,
 	last_seen      INTEGER NOT NULL,
 	ips            TEXT NOT NULL DEFAULT '[]'
@@ -78,11 +87,13 @@ CREATE TABLE IF NOT EXISTS alerts (
 	title        TEXT NOT NULL DEFAULT '',
 	severity     TEXT NOT NULL DEFAULT '',
 	signature    TEXT NOT NULL DEFAULT '',
-	mitre        TEXT NOT NULL DEFAULT '[]',
-	event_json   TEXT NOT NULL DEFAULT 'null',
-	actions_json TEXT NOT NULL DEFAULT 'null',
-	triage_json  TEXT,
-	created_at   INTEGER NOT NULL
+	mitre         TEXT NOT NULL DEFAULT '[]',
+	event_json    TEXT NOT NULL DEFAULT 'null',
+	actions_json  TEXT NOT NULL DEFAULT 'null',
+	proposed_json TEXT NOT NULL DEFAULT '[]',
+	approval      TEXT NOT NULL DEFAULT '',
+	triage_json   TEXT,
+	created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_time ON alerts(time DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_host ON alerts(host_id);
@@ -125,6 +136,18 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: init schema: %w", err)
 	}
+	// Best-effort migrations for databases created before these columns existed.
+	// A "duplicate column" error just means the column is already present.
+	for _, mig := range []string{
+		`ALTER TABLE alerts ADD COLUMN proposed_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE alerts ADD COLUMN approval TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE hosts ADD COLUMN response_mode TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(mig); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			return nil, fmt.Errorf("store: migrate: %w", err)
+		}
+	}
 	return &Store{db: db}, nil
 }
 
@@ -137,13 +160,13 @@ func (s *Store) UpsertHost(h api.Host) error {
 	now := time.Now().UTC().UnixNano()
 	ips, _ := json.Marshal(h.IPs)
 	_, err := s.db.Exec(`
-INSERT INTO hosts (id, hostname, os, kernel, arch, agent_version, process_source, first_seen, last_seen, ips)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO hosts (id, hostname, os, kernel, arch, agent_version, process_source, response_mode, first_seen, last_seen, ips)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	hostname=excluded.hostname, os=excluded.os, kernel=excluded.kernel, arch=excluded.arch,
 	agent_version=excluded.agent_version, process_source=excluded.process_source,
-	last_seen=excluded.last_seen, ips=excluded.ips`,
-		h.ID, h.Hostname, h.OS, h.Kernel, h.Arch, h.AgentVersion, h.ProcessSource, now, now, string(ips))
+	response_mode=excluded.response_mode, last_seen=excluded.last_seen, ips=excluded.ips`,
+		h.ID, h.Hostname, h.OS, h.Kernel, h.Arch, h.AgentVersion, h.ProcessSource, h.ResponseMode, now, now, string(ips))
 	return err
 }
 
@@ -160,8 +183,8 @@ func (s *Store) InsertAlerts(hostID string, alerts []*event.Alert) (accepted, du
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(`
 INSERT OR IGNORE INTO alerts
-	(id, host_id, time, rule_id, title, severity, signature, mitre, event_json, actions_json, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	(id, host_id, time, rule_id, title, severity, signature, mitre, event_json, actions_json, proposed_json, approval, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -174,8 +197,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 		mitre, _ := json.Marshal(a.MITRE)
 		ev, _ := json.Marshal(a.Event)
 		actions, _ := json.Marshal(a.Actions)
+		proposed, _ := json.Marshal(a.Proposed)
+		// An alert the agent is holding for approval starts life pending.
+		approval := ""
+		if len(a.Proposed) > 0 {
+			approval = ApprovalPending
+		}
 		res, err := stmt.Exec(a.ID, hostID, a.Time.UnixNano(), a.RuleID, a.Title, a.Severity,
-			a.Signature, string(mitre), string(ev), string(actions), now)
+			a.Signature, string(mitre), string(ev), string(actions), string(proposed), approval, now)
 		if err != nil {
 			return accepted, duplicate, err
 		}
@@ -191,7 +220,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	return accepted, duplicate, nil
 }
 
-const alertCols = `id, host_id, time, rule_id, title, severity, signature, mitre, event_json, actions_json, triage_json, created_at`
+const alertCols = `id, host_id, time, rule_id, title, severity, signature, mitre, event_json, actions_json, proposed_json, approval, triage_json, created_at`
 
 // ListAlerts returns alerts matching the filter, newest first.
 func (s *Store) ListAlerts(f AlertFilter) ([]*Alert, error) {
@@ -252,14 +281,14 @@ func (s *Store) GetAlert(id string) (*Alert, error) {
 
 func scanAlert(rows *sql.Rows) (*Alert, error) {
 	var (
-		a                  Alert
-		hostID             string
-		tns, cns           int64
-		mitre, ev, actions string
-		triage             sql.NullString
+		a                            Alert
+		hostID                       string
+		tns, cns                     int64
+		mitre, ev, actions, proposed string
+		triage                       sql.NullString
 	)
 	if err := rows.Scan(&a.ID, &hostID, &tns, &a.RuleID, &a.Title, &a.Severity,
-		&a.Signature, &mitre, &ev, &actions, &triage, &cns); err != nil {
+		&a.Signature, &mitre, &ev, &actions, &proposed, &a.Approval, &triage, &cns); err != nil {
 		return nil, err
 	}
 	a.Host = hostID
@@ -268,10 +297,45 @@ func scanAlert(rows *sql.Rows) (*Alert, error) {
 	_ = json.Unmarshal([]byte(mitre), &a.MITRE)
 	_ = json.Unmarshal([]byte(ev), &a.Event)
 	_ = json.Unmarshal([]byte(actions), &a.Actions)
+	_ = json.Unmarshal([]byte(proposed), &a.Proposed)
 	if triage.Valid && triage.String != "" {
 		a.Triage = json.RawMessage(triage.String)
 	}
 	return &a, nil
+}
+
+// SetApproval sets an alert's approval status (ask-mode proposals).
+func (s *Store) SetApproval(alertID, status string) error {
+	res, err := s.db.Exec("UPDATE alerts SET approval = ? WHERE id = ?", status, alertID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListPendingApprovals returns alerts awaiting operator approval, newest first.
+func (s *Store) ListPendingApprovals(limit int) ([]*Alert, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.Query(`SELECT `+alertCols+` FROM alerts WHERE approval = ? ORDER BY time DESC LIMIT ?`,
+		ApprovalPending, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Alert
+	for rows.Next() {
+		a, err := scanAlert(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // SetTriage stores (or replaces) the triage JSON for an alert.
@@ -289,7 +353,7 @@ func (s *Store) SetTriage(alertID string, triageJSON []byte) error {
 // ListHosts returns every known host, most recently seen first.
 func (s *Store) ListHosts() ([]*Host, error) {
 	rows, err := s.db.Query(`
-SELECT id, hostname, os, kernel, arch, agent_version, process_source, first_seen, last_seen, ips
+SELECT id, hostname, os, kernel, arch, agent_version, process_source, response_mode, first_seen, last_seen, ips
 FROM hosts ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, err
@@ -304,7 +368,7 @@ FROM hosts ORDER BY last_seen DESC`)
 			ips   string
 		)
 		if err := rows.Scan(&h.ID, &h.Hostname, &h.OS, &h.Kernel, &h.Arch, &h.AgentVersion,
-			&h.ProcessSource, &first, &last, &ips); err != nil {
+			&h.ProcessSource, &h.ResponseMode, &first, &last, &ips); err != nil {
 			return nil, err
 		}
 		h.FirstSeen = time.Unix(0, first).UTC()

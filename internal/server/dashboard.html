@@ -76,6 +76,16 @@
   button:disabled { opacity: .5; cursor: default; }
   .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .summary { color: var(--muted); font-size: 12.5px; margin-top: 4px; max-width: 520px; }
+  .approvals { border-color: var(--high); box-shadow: 0 0 0 1px var(--high-bg); }
+  #approvals-title { color: var(--high); }
+  .mode { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .3px; }
+  .mode-ask { color: var(--medium); background: var(--medium-bg); }
+  .mode-auto { color: var(--crit); background: var(--crit-bg); }
+  .mode-off { color: var(--info); background: var(--info-bg); }
+  .state { font-size: 12px; }
+  .state-awaiting { color: var(--high); font-weight: 600; }
+  .state-ok { color: var(--ok); }
+  .state-fail { color: var(--fail); }
   .empty { padding: 24px; text-align: center; color: var(--muted); }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 </style>
@@ -99,10 +109,18 @@
 
   <div class="counts" id="counts"></div>
 
+  <div id="approvals-wrap" hidden>
+    <h2 id="approvals-title">Pending approvals</h2>
+    <div class="panel approvals"><table>
+      <thead><tr><th>Time</th><th>Sev</th><th>Alert</th><th>Host</th><th>Proposed</th><th>Decision</th></tr></thead>
+      <tbody id="approvals"></tbody>
+    </table></div>
+  </div>
+
   <h2>Hosts</h2>
   <div class="panel"><table>
-    <thead><tr><th>Host</th><th>OS</th><th>Source</th><th>IPs</th><th>Last seen</th><th>Actions</th></tr></thead>
-    <tbody id="hosts"><tr><td colspan="6" class="empty">No hosts yet.</td></tr></tbody>
+    <thead><tr><th>Host</th><th>OS</th><th>Mode</th><th>Source</th><th>IPs</th><th>Last seen</th><th>Actions</th></tr></thead>
+    <tbody id="hosts"><tr><td colspan="7" class="empty">No hosts yet.</td></tr></tbody>
   </table></div>
 
   <h2>Recent alerts</h2>
@@ -148,18 +166,50 @@ function renderCounts(counts) {
   el("counts").innerHTML = cells.join("");
 }
 
+function modePill(m) {
+  m = (m || "off").toLowerCase();
+  const label = { ask: "ask", auto: "auto", off: "off" }[m] || m;
+  return `<span class="mode mode-${esc(m)}" title="response mode">${esc(label)}</span>`;
+}
+
 function renderHosts(hosts) {
   const tb = el("hosts");
-  if (!hosts || !hosts.length) { tb.innerHTML = `<tr><td colspan="6" class="empty">No hosts yet.</td></tr>`; return; }
+  if (!hosts || !hosts.length) { tb.innerHTML = `<tr><td colspan="7" class="empty">No hosts yet.</td></tr>`; return; }
   tb.innerHTML = hosts.map(h => `
     <tr>
       <td><strong>${esc(h.hostname || h.id)}</strong><div class="muted mono">${esc(h.id)}</div></td>
       <td>${esc(h.os || "—")}<div class="muted">${esc(h.kernel || "")} ${esc(h.arch || "")}</div></td>
+      <td>${modePill(h.response_mode)}</td>
       <td>${esc(h.process_source || "—")}</td>
       <td class="mono">${esc((h.ips || []).join(", ") || "—")}</td>
       <td title="${esc(h.last_seen)}">${ago(h.last_seen)}</td>
       <td><div class="actions">
         <button class="act" data-act="scan" data-host="${esc(h.id)}">Scan…</button>
+      </div></td>
+    </tr>`).join("");
+}
+
+// Human label for an alert's proposed actions, e.g. "kill, quarantine".
+function proposedLabel(a) {
+  return (a.proposed || []).map(k => esc(k)).join(", ") || "—";
+}
+
+function renderApprovals(list) {
+  const wrap = el("approvals-wrap");
+  const tb = el("approvals");
+  if (!list || !list.length) { wrap.hidden = true; tb.innerHTML = ""; return; }
+  wrap.hidden = false;
+  el("approvals-title").textContent = `Pending approvals (${list.length})`;
+  tb.innerHTML = list.map(a => `
+    <tr>
+      <td title="${esc(a.time)}">${ago(a.time)}</td>
+      <td>${sevPill(a.severity)}</td>
+      <td>${alertTitle(a)}</td>
+      <td class="mono">${esc(a.host || "—")}</td>
+      <td>${proposedLabel(a)}</td>
+      <td><div class="actions">
+        <button class="act primary" data-act="approve" data-id="${esc(a.id)}">Approve</button>
+        <button class="act" data-act="decline" data-id="${esc(a.id)}">Dismiss</button>
       </div></td>
     </tr>`).join("");
 }
@@ -183,6 +233,19 @@ function triageCell(a) {
 // paths are never interpolated into inline JS, so a crafted filename cannot
 // break out of an onclick attribute.
 function alertActions(a) {
+  // Actions already taken (auto mode or an approved proposal).
+  if (a.actions && a.actions.length) {
+    return `<div class="state">` + a.actions.map(r => {
+      const cls = r.ok ? "state-ok" : "state-fail";
+      const detail = r.ok ? (r.detail ? " → " + esc(r.detail) : "") : (r.error ? ": " + esc(r.error) : "");
+      return `<div class="${cls}">${esc(r.action)} ${esc(r.target)}${detail}</div>`;
+    }).join("") + `</div>`;
+  }
+  // Proposed in ask mode, awaiting a decision.
+  if (a.approval === "pending") return `<span class="state state-awaiting">awaiting approval</span>`;
+  if (a.approval === "approved") return `<span class="state state-ok">approved</span>`;
+  if (a.approval === "dismissed") return `<span class="muted">dismissed</span>`;
+  // Off mode or operator-initiated: offer manual actions.
   const btns = [];
   const ev = a.event || {};
   const p = ev.process;
@@ -224,6 +287,7 @@ async function refresh() {
     if (!r.ok) throw new Error("HTTP " + r.status);
     const o = await r.json();
     renderCounts(o.counts);
+    renderApprovals(o.approvals);
     renderHosts(o.hosts);
     renderAlerts(o.alerts);
     el("updated").textContent = "updated " + new Date().toLocaleTimeString();
@@ -243,8 +307,26 @@ document.addEventListener("click", (e) => {
     case "scan": scanHost(d.host); break;
     case "kill": cmd(d.host, "kill", { pid: Number(d.pid), alert_id: d.id }); break;
     case "quarantine": cmd(d.host, "quarantine", { path: d.path, alert_id: d.id }); break;
+    case "approve": decide(d.id, "approve", btn); break;
+    case "decline": decide(d.id, "decline", btn); break;
   }
 });
+
+// Approve or dismiss a pending proposal (ask mode).
+async function decide(id, action, btn) {
+  if (action === "approve" && !confirm("Approve and run the proposed response action(s)?")) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/alerts/${encodeURIComponent(id)}/${action}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    await refresh();
+  } catch (e) {
+    btn.disabled = false;
+    alert(action + " failed: " + e.message);
+  }
+}
 
 async function triage(id, btn) {
   btn.disabled = true; btn.textContent = "Triaging…";

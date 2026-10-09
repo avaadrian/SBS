@@ -27,6 +27,7 @@ func gatherHost(cfg Config) api.Host {
 	h.Kernel = strings.TrimSpace(readFile("/proc/sys/kernel/osrelease"))
 	h.IPs = localIPs()
 	h.ID = hostID(cfg)
+	h.ResponseMode = cfg.Response.mode()
 	return h
 }
 
@@ -130,7 +131,11 @@ func (a *Agent) sendHeartbeat(ctx context.Context) {
 // silently dropping it, so the console sees why nothing happened.
 func (a *Agent) runCommand(ctx context.Context, cmd api.Command) {
 	res := api.CommandResult{HostID: a.host.ID, CommandID: cmd.ID, Time: time.Now().UTC()}
-	if !a.cfg.RemoteCommands {
+	// kill/quarantine are accepted when remote commands are on, or in ask mode
+	// (where such a command is the operator's approval of the agent's own
+	// proposal). scan is only ever accepted with remote commands enabled.
+	approval := a.respMode == ModeAsk && (cmd.Type == api.CmdKill || cmd.Type == api.CmdQuarantine)
+	if !a.cfg.RemoteCommands && !approval {
 		res.Error = "remote commands disabled on agent"
 		a.trans.CommandResult(ctx, res)
 		return

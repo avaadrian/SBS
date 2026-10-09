@@ -31,11 +31,36 @@ import (
 // severityRank orders severities for threshold comparisons.
 var severityRank = map[string]int{"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
+// Response modes.
+const (
+	ModeOff  = "off"  // never act automatically
+	ModeAsk  = "ask"  // propose the action and wait for operator approval
+	ModeAuto = "auto" // act immediately
+)
+
 // ResponseConfig controls automatic response actions.
 type ResponseConfig struct {
+	// Mode is off | ask | auto. If empty, Enabled is used for back-compat
+	// (true => auto, false => off).
+	Mode          string `yaml:"mode"`
 	Enabled       bool   `yaml:"enabled"`
-	MinSeverity   string `yaml:"min_severity"` // kill/quarantine at or above this severity
+	MinSeverity   string `yaml:"min_severity"` // act/propose at or above this severity
 	QuarantineDir string `yaml:"quarantine_dir"`
+}
+
+// mode returns the effective response mode.
+func (r ResponseConfig) mode() string {
+	switch r.Mode {
+	case ModeOff, ModeAsk, ModeAuto:
+		return r.Mode
+	case "":
+		if r.Enabled {
+			return ModeAuto
+		}
+		return ModeOff
+	default:
+		return r.Mode // validated in New
+	}
 }
 
 // ServerConfig points the agent at an sbs-server for alert upload and commands.
@@ -94,7 +119,7 @@ func DefaultConfig() Config {
 		ScanOnWrite:   true,
 		ScanMaxSize:   scanner.DefaultMaxSize,
 		Dedup:         5 * time.Second,
-		Response:      ResponseConfig{Enabled: true, MinSeverity: "critical", QuarantineDir: "/var/lib/sbs/quarantine"},
+		Response:      ResponseConfig{Mode: ModeAsk, MinSeverity: "critical", QuarantineDir: "/var/lib/sbs/quarantine"},
 		Anomaly:       AnomalyConfig{Enabled: true, StateDir: "/var/lib/sbs"},
 		Watch: []fs.Watch{
 			{Path: "/etc/cron.d", Tag: "persistence"},
@@ -157,7 +182,8 @@ type Agent struct {
 	trans    *transport.Client
 	host     api.Host
 	started  time.Time
-	respMin  int // severity rank threshold for automatic response, -1 = disabled
+	respMin  int    // severity rank threshold for response, -1 = disabled (off)
+	respMode string // off | ask | auto
 }
 
 // New builds an agent. defaultRules/defaultSigs are the built-in sets.
@@ -204,7 +230,13 @@ func New(cfg Config, defaultRules []*rules.Rule, defaultSigs func(*scanner.Scann
 	if cfg.Anomaly.Enabled {
 		a.anom = anomaly.New(cfg.Anomaly.StateDir)
 	}
-	if cfg.Response.Enabled {
+	a.respMode = cfg.Response.mode()
+	switch a.respMode {
+	case ModeOff, ModeAsk, ModeAuto:
+	default:
+		return nil, fmt.Errorf("response.mode: unknown mode %q (want off|ask|auto)", a.respMode)
+	}
+	if a.respMode != ModeOff {
 		a.actioner = response.NewActioner()
 		r, ok := severityRank[cfg.Response.MinSeverity]
 		if !ok {
@@ -346,25 +378,53 @@ func (a *Agent) Handle(ev *event.Event) {
 	}
 }
 
-// respond applies automatic response actions to an alert at or above the
-// configured severity threshold, recording each outcome on the alert.
+// respond handles an alert at or above the configured severity threshold.
+// In auto mode it executes the response actions and records the outcomes; in
+// ask mode it only records which actions it proposes, leaving execution to an
+// operator approval (delivered back as a server command).
 func (a *Agent) respond(al *event.Alert) {
 	if a.actioner == nil || a.respMin < 0 || severityRank[al.Severity] < a.respMin {
 		return
 	}
-	p := al.Event.Process
-	if p != nil && p.PID > 0 {
-		al.Actions = append(al.Actions, a.actioner.Kill(p.PID))
-		// A malicious binary we matched by signature is also quarantined.
-		if al.Signature != "" && p.Exe != "" {
-			exe := strings.TrimSuffix(p.Exe, " (deleted)")
-			al.Actions = append(al.Actions, a.actioner.Quarantine(exe, a.cfg.Response.QuarantineDir))
+	actions := proposedActions(al) // ordered list of {type, target}
+	if a.respMode == ModeAsk {
+		for _, act := range actions {
+			al.Proposed = append(al.Proposed, act.kind)
 		}
 		return
 	}
-	if f := al.Event.File; f != nil && f.Path != "" {
-		al.Actions = append(al.Actions, a.actioner.Quarantine(f.Path, a.cfg.Response.QuarantineDir))
+	for _, act := range actions {
+		switch act.kind {
+		case api.CmdKill:
+			al.Actions = append(al.Actions, a.actioner.Kill(act.pid))
+		case api.CmdQuarantine:
+			al.Actions = append(al.Actions, a.actioner.Quarantine(act.path, a.cfg.Response.QuarantineDir))
+		}
 	}
+}
+
+type respAction struct {
+	kind string // api.CmdKill | api.CmdQuarantine
+	pid  int
+	path string
+}
+
+// proposedActions is the response plan for an alert: kill the process (and
+// quarantine its binary when the hit was a signature match), or quarantine the
+// written file. The server derives the same plan when an operator approves.
+func proposedActions(al *event.Alert) []respAction {
+	var out []respAction
+	if p := al.Event.Process; p != nil && p.PID > 0 {
+		out = append(out, respAction{kind: api.CmdKill, pid: p.PID})
+		if al.Signature != "" && p.Exe != "" {
+			out = append(out, respAction{kind: api.CmdQuarantine, path: strings.TrimSuffix(p.Exe, " (deleted)")})
+		}
+		return out
+	}
+	if f := al.Event.File; f != nil && f.Path != "" {
+		out = append(out, respAction{kind: api.CmdQuarantine, path: f.Path})
+	}
+	return out
 }
 
 func (a *Agent) scanPath(path string, ev *event.Event, sha *string) []*event.Alert {

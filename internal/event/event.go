@@ -97,6 +97,9 @@ type Alert struct {
 	Event     *Event    `json:"event"`
 	// Actions are automatic response actions the agent took for this alert.
 	Actions []ActionResult `json:"actions,omitempty"`
+	// Proposed lists response action types ("kill", "quarantine") the agent
+	// would take but is holding for approval (ask mode). Empty in auto/off mode.
+	Proposed []string `json:"proposed,omitempty"`
 }
 
 // ActionResult records one response action (kill, quarantine, ...).

@@ -32,6 +32,7 @@ type Host struct {
 	IPs           []string `json:"ips,omitempty"`
 	AgentVersion  string   `json:"agent_version"`
 	ProcessSource string   `json:"process_source"` // netlink | procfs
+	ResponseMode  string   `json:"response_mode"`  // off | ask | auto
 }
 
 // AlertBatch uploads alerts. Alert IDs make uploads idempotent: the server

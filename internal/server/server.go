@@ -99,6 +99,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/alerts", s.handleListAlerts)
 	mux.HandleFunc("GET /api/alerts/{id}", s.handleGetAlert)
 	mux.HandleFunc("POST /api/alerts/{id}/triage", s.handleTriage)
+	mux.HandleFunc("POST /api/alerts/{id}/approve", s.handleApprove)
+	mux.HandleFunc("POST /api/alerts/{id}/decline", s.handleDecline)
 	mux.HandleFunc("POST /api/hosts/{id}/commands", s.handleEnqueueCommand)
 	return mux
 }
@@ -247,11 +249,17 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	approvals, err := s.st.ListPendingApprovals(defaultLimit)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"time":   time.Now().UTC(),
-		"hosts":  hosts,
-		"counts": counts,
-		"alerts": alerts,
+		"time":      time.Now().UTC(),
+		"hosts":     hosts,
+		"counts":    counts,
+		"alerts":    alerts,
+		"approvals": approvals,
 	})
 }
 
@@ -391,6 +399,90 @@ func (s *Server) handleEnqueueCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, cmd)
+}
+
+// handleApprove approves an alert's proposed response actions (ask mode): it
+// enqueues the corresponding command(s) for the alert's host, derived from the
+// alert's own event, and marks the alert approved.
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
+	if !guardConsolePOST(w, r, false) {
+		return
+	}
+	a, err := s.st.GetAlert(r.PathValue("id"))
+	if err == store.ErrNotFound {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if len(a.Proposed) == 0 {
+		http.Error(w, "alert has no proposed actions", http.StatusBadRequest)
+		return
+	}
+	cmds := commandsFor(&a.Alert)
+	if len(cmds) == 0 {
+		http.Error(w, "proposed actions could not be resolved from the alert", http.StatusBadRequest)
+		return
+	}
+	for _, c := range cmds {
+		if err := s.st.EnqueueCommand(a.Host, c); err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	if err := s.st.SetApproval(a.ID, store.ApprovalApproved); err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"approved": true, "commands": cmds})
+}
+
+// handleDecline dismisses an alert's proposed actions without acting.
+func (s *Server) handleDecline(w http.ResponseWriter, r *http.Request) {
+	if !guardConsolePOST(w, r, false) {
+		return
+	}
+	if err := s.st.SetApproval(r.PathValue("id"), store.ApprovalDismissed); err == store.ErrNotFound {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// commandsFor builds the response commands for an alert's proposed actions,
+// deriving pid/path from the alert's event (the same plan the agent proposed).
+func commandsFor(a *event.Alert) []api.Command {
+	now := time.Now().UTC()
+	reason := "approved: " + a.RuleID
+	var cmds []api.Command
+	for _, kind := range a.Proposed {
+		c := api.Command{ID: newID(), Type: kind, Reason: reason, AlertID: a.ID, Created: now}
+		switch kind {
+		case api.CmdKill:
+			if a.Event == nil || a.Event.Process == nil || a.Event.Process.PID <= 0 {
+				continue
+			}
+			c.PID = a.Event.Process.PID
+		case api.CmdQuarantine:
+			switch {
+			case a.Signature != "" && a.Event != nil && a.Event.Process != nil && a.Event.Process.Exe != "":
+				c.Path = strings.TrimSuffix(a.Event.Process.Exe, " (deleted)")
+			case a.Event != nil && a.Event.File != nil && a.Event.File.Path != "":
+				c.Path = a.Event.File.Path
+			default:
+				continue
+			}
+		default:
+			continue
+		}
+		cmds = append(cmds, c)
+	}
+	return cmds
 }
 
 // relatedAlerts returns recent alerts on the same host, excluding a itself.

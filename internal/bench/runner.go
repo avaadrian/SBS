@@ -100,7 +100,7 @@ alerts: %s
 events: %s
 dedup: 2s
 response:
-  enabled: false
+  mode: "off"
 anomaly:
   enabled: false
 watch:

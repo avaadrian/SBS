@@ -42,7 +42,7 @@ watch:
 # Kill the process and quarantine malicious files at or above min_severity.
 # Enabled by default for critical detections only.
 response:
-  enabled: true
+  mode: ask                       # off | ask (propose, wait for approval) | auto (act immediately)
   min_severity: critical          # info|low|medium|high|critical
   quarantine_dir: /var/lib/sbs/quarantine
 

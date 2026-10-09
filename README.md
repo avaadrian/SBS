@@ -127,24 +127,39 @@ signatures:
 ## Response
 
 On a detection at or above `response.min_severity` (default `critical`), the agent
-acts automatically: it **kills** the offending process (refusing pid ≤ 1, itself, and
-its own process group), and for a signature match on a binary it also **quarantines**
-the file — moved into `quarantine_dir`, renamed by content hash, and stripped to mode
-`0000`. Quarantine refuses anything under `/proc`, `/sys`, `/dev`, symlinks, and
-non-regular files. Every action is recorded on the alert (`actions[]`) and uploaded.
-Set `response.enabled: false` for alert-only mode.
+can **kill** the offending process (refusing pid ≤ 1, itself, and its own process
+group) and **quarantine** a malicious file — moved into `quarantine_dir`, renamed by
+content hash, stripped to mode `0000`. Quarantine refuses pseudo-filesystems, core
+system trees, symlinks and non-regular files, and is symlink-race-safe.
 
-The server console can also issue `kill`, `quarantine` and `scan` commands to a host;
-the agent runs them only when `remote_commands: true` (off by default).
+`response.mode` picks how that happens:
+
+| Mode | Behavior |
+|---|---|
+| `ask` (default) | The agent **proposes** the action and does nothing until a human **approves** it in the console. Nothing is killed without you. |
+| `auto` | The agent acts **immediately** on a critical detection. Fastest containment. |
+| `off` | Alert only; never acts. |
+
+In `ask` mode the proposal appears in the console's **Pending approvals** panel;
+**Approve** sends the derived command back to the agent (which executes it), **Dismiss**
+drops it. Every executed action is recorded on the alert (`actions[]`). The console can
+also issue `kill`/`quarantine`/`scan` manually; outside an approval the agent runs those
+only when `remote_commands: true` (off by default).
 
 ## Server and console
 
+![SBS console](docs/dashboard.png)
+
 `sbs-server` stores alerts and host state in SQLite (pure-Go, no cgo) and serves a
-dependency-free web dashboard plus a JSON API on localhost. Agents authenticate with a
-bearer token (`-token` / `SBS_AGENT_TOKEN`, constant-time compared) and POST alert
-batches (gzip, idempotent by alert ID) and heartbeats; the heartbeat response carries
-any queued commands. Uploads that fail are spooled to disk by the agent and resent when
-the server returns, so alerts survive an outage.
+dependency-free web dashboard plus a JSON API on localhost: severity counts, a
+**pending-approvals** panel, the host list (with each host's response mode), and recent
+alerts with their AI triage verdict and action state. It auto-refreshes, works in light
+and dark, and escapes all agent-supplied text (paths, command lines) safely.
+
+Agents authenticate with a bearer token (`-token` / `SBS_AGENT_TOKEN`, constant-time
+compared) and POST alert batches (gzip, idempotent by alert ID) and heartbeats; the
+heartbeat response carries any queued commands. Uploads that fail are spooled to disk by
+the agent and resent when the server returns, so alerts survive an outage.
 
 ## AI analyst
 
